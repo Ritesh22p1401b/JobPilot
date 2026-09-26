@@ -1,94 +1,88 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import Link from "next/link";
-import { useState } from "react";
+import { Columns3, LayoutList, Search, Table2, X } from "lucide-react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useMemo, useState } from "react";
 
-import { AppStatusBadge, JobLink, NeedsResume } from "@/components/domain";
-import { Card, Empty, ErrorState, LinkButton, Loading, PageHeader, ScoreBadge, Table, Td, Th } from "@/components/ui";
-import { ApiError, api } from "@/lib/api";
-import * as S from "@/lib/schemas";
-import { cn, fmtDate, humanize } from "@/lib/utils";
+import { statusOf } from "@/components/applications/model";
+import { ApplicationsTable, KanbanBoard } from "@/components/applications/tracker";
+import { RequireProfile } from "@/components/layout/require-profile";
+import { ButtonLink, EmptyState, ErrorState, Input, PageHeader, PageSkeleton, Segmented } from "@/components/ui";
+import { useApplications, useLocalPref, useVersions } from "@/lib/hooks";
 
-export default function ApplicationsPage() {
-  const apps = useQuery({ queryKey: ["applications"], queryFn: () => api(S.ApplicationList, "GET", "/applications") });
-  const [status, setStatus] = useState<string>("ALL");
+function Tracker() {
+  const apps = useApplications();
+  const versions = useVersions();
+  const params = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const [view, setView] = useLocalPref<"board" | "table">("tracker-view", "board");
+  const [q, setQ] = useState("");
+  const status = params.get("status");
 
-  if (apps.isLoading) return <Loading />;
-  if (apps.error instanceof ApiError && apps.error.status === 409)
-    return (
-      <>
-        <PageHeader title="Applications" />
-        <NeedsResume />
-      </>
-    );
-  if (apps.error) return <ErrorState error={apps.error} />;
+  const vmap = useMemo(() => new Map((versions.data?.versions ?? []).map((v) => [v.id, v])), [versions.data]);
   const all = apps.data?.applications ?? [];
-  const counts = all.reduce<Record<string, number>>((acc, a) => ({ ...acc, [a.status]: (acc[a.status] ?? 0) + 1 }), {});
-  const shown = status === "ALL" ? all : all.filter((a) => a.status === status);
+  const shown = all.filter((a) => (!status || a.status === status) && (!q || `${a.job?.title} ${a.job?.company}`.toLowerCase().includes(q.toLowerCase())));
+
+  if (apps.isLoading) return <PageSkeleton />;
+  if (apps.error) return <ErrorState error={apps.error} onRetry={() => apps.refetch()} />;
 
   return (
     <>
       <PageHeader
-        title="Applications"
-        description="Every action is recorded in each application’s audit trail. Nothing is submitted without your approval unless you enabled authorized auto-apply."
+        title="Application Tracker"
+        description="Every application from saved to offer. Drag cards between columns, or use each card’s Move menu. Every change is recorded in the application’s timeline."
+        action={
+          <Segmented
+            label="View"
+            value={view}
+            onChange={setView}
+            options={[
+              { id: "board", label: "Kanban", icon: <Columns3 className="h-4 w-4" /> },
+              { id: "table", label: "Table", icon: <Table2 className="h-4 w-4" /> },
+            ]}
+          />
+        }
       />
-      <div className="mb-4 flex flex-wrap gap-1.5">
-        {["ALL", ...(apps.data?.statuses ?? [])].map((s) => (
-          <button
-            key={s}
-            onClick={() => setStatus(s)}
-            className={cn(
-              "rounded-full border px-3 py-1 text-xs font-medium",
-              status === s ? "border-primary bg-info-soft text-primary" : "text-muted-foreground hover:bg-muted",
-            )}
-          >
-            {s === "ALL" ? "All" : humanize(s)} <span className="tabular">({s === "ALL" ? all.length : (counts[s] ?? 0)})</span>
-          </button>
-        ))}
-      </div>
-      {shown.length === 0 ? (
-        <Empty title="No applications here" action={<LinkButton href="/jobs">Browse jobs</LinkButton>}>
-          Save a job or prepare an application from a job’s page.
-        </Empty>
+      {all.length === 0 ? (
+        <EmptyState icon={<LayoutList className="h-5 w-5" />} title="No applications yet" action={<ButtonLink href="/matches">Find high-match jobs</ButtonLink>}>
+          Start by finding a high-match job, then save it or prepare an application.
+        </EmptyState>
       ) : (
-        <Card>
-          <Table>
-            <thead>
-              <tr>
-                <Th>Job</Th>
-                <Th>Match</Th>
-                <Th>Status</Th>
-                <Th>Mode</Th>
-                <Th>Applied</Th>
-                <Th>Updated</Th>
-                <Th><span className="sr-only">Open</span></Th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((a) => (
-                <tr key={a.id}>
-                  <Td className="max-w-sm">{a.job ? <JobLink id={a.job.id} title={a.job.title} company={a.job.company} /> : a.job_id}</Td>
-                  <Td>
-                    <ScoreBadge score={a.job?.match?.overall_score} />
-                  </Td>
-                  <Td>
-                    <AppStatusBadge status={a.status} />
-                  </Td>
-                  <Td className="text-xs">{humanize(a.mode)}</Td>
-                  <Td className="text-xs text-muted-foreground">{fmtDate(a.applied_at)}</Td>
-                  <Td className="text-xs text-muted-foreground">{fmtDate(a.updated_at)}</Td>
-                  <Td>
-                    <Link href={`/applications/${a.id}`} className="text-sm text-primary">
-                      Open
-                    </Link>
-                  </Td>
-                </tr>
-              ))}
-            </tbody>
-          </Table>
-        </Card>
+        <>
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[220px] flex-1 sm:max-w-sm">
+              <Search className="absolute top-2.5 left-3 h-4 w-4 text-muted" aria-hidden />
+              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search role or company" className="pl-9" aria-label="Search applications" />
+            </div>
+            {status && (
+              <button onClick={() => router.replace(pathname)} className="inline-flex items-center gap-1 rounded-full border border-border bg-elevated px-2.5 py-1 text-xs text-subtle hover:border-border-strong">
+                Status: {statusOf(status).label} <X className="h-3 w-3" aria-label="Clear status filter" />
+              </button>
+            )}
+            <span className="text-xs text-muted">
+              {shown.length} of {all.length}
+            </span>
+          </div>
+          {view === "board" ? (
+            <KanbanBoard apps={shown} versions={vmap} />
+          ) : (
+            <div className="overflow-hidden rounded-xl border border-border bg-surface">
+              <ApplicationsTable apps={shown} versions={vmap} />
+            </div>
+          )}
+        </>
       )}
     </>
+  );
+}
+
+export default function ApplicationsPage() {
+  return (
+    <RequireProfile title="Application Tracker">
+      <Suspense fallback={<PageSkeleton />}>
+        <Tracker />
+      </Suspense>
+    </RequireProfile>
   );
 }

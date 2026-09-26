@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from app.api import agents, applications, auth, jobs, privacy, profile, resume, system
+from app.api import agents, applications, auth, insights, jobs, privacy, profile, resume, system
 from app.config import get_settings
 from app.database import get_engine, get_sessionmaker
 from app.logging_config import configure_logging, log_event, request_id_var
@@ -92,7 +92,7 @@ def create_app() -> FastAPI:
 
     prefix = "/api/v1"
     for r in (auth.router, resume.router, profile.router, jobs.router, applications.router, agents.router,
-              privacy.router, system.router):
+              privacy.router, system.router, insights.router):
         app.include_router(r, prefix=prefix)
 
     @app.get("/metrics", include_in_schema=False)

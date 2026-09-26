@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.application_agent import (
@@ -17,7 +17,7 @@ from app.api.deps import agent_limiter, current_candidate
 from app.api.serializers import application_out, task_out
 from app.database import get_db, utcnow
 from app.events.bus import publish
-from app.models import Application, ApplicationEvent, CandidateProfile, Job
+from app.models import Application, ApplicationEvent, CandidateProfile, Job, JobMatch
 from app.models.application import APPLICATION_STATUSES
 
 router = APIRouter(prefix="/applications", tags=["applications"])
@@ -40,10 +40,11 @@ async def _by_job(db: AsyncSession, candidate: CandidateProfile, job_id: str) ->
 
 @router.get("")
 async def list_applications(candidate: CandidateProfile = Depends(current_candidate), db: AsyncSession = Depends(get_db)) -> dict:
-    rows = (await db.execute(select(Application, Job).join(Job, Job.id == Application.job_id)
+    rows = (await db.execute(select(Application, Job, JobMatch).join(Job, Job.id == Application.job_id)
+                             .outerjoin(JobMatch, and_(JobMatch.job_id == Job.id, JobMatch.candidate_id == candidate.id))
                              .where(Application.candidate_id == candidate.id)
                              .order_by(Application.updated_at.desc()))).all()
-    return {"applications": [application_out(a, j) for a, j in rows], "statuses": list(APPLICATION_STATUSES)}
+    return {"applications": [application_out(a, j, match=m) for a, j, m in rows], "statuses": list(APPLICATION_STATUSES)}
 
 
 @router.get("/{application_id}")
@@ -53,7 +54,9 @@ async def get_application(application_id: str, candidate: CandidateProfile = Dep
     job = await db.get(Job, app.job_id)
     events = (await db.execute(select(ApplicationEvent).where(ApplicationEvent.application_id == app.id)
                                .order_by(ApplicationEvent.created_at))).scalars().all()
-    return application_out(app, job, list(events))
+    match = (await db.execute(select(JobMatch).where(JobMatch.job_id == app.job_id,
+                                                     JobMatch.candidate_id == candidate.id))).scalars().first()
+    return application_out(app, job, list(events), match)
 
 
 @router.post("/{job_id}/save", status_code=201)

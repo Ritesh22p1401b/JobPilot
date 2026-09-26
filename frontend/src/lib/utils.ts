@@ -17,6 +17,25 @@ export function fmtDateTime(iso: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
+/** "just now", "3 h ago", "2 d ago", then a date. */
+export function fmtRelative(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  const s = (Date.now() - d.getTime()) / 1000;
+  if (Number.isNaN(s)) return "—";
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  if (s < 86400 * 7) return `${Math.floor(s / 86400)} d ago`;
+  return fmtDate(iso);
+}
+
+export function daysSince(iso: string | null | undefined): number | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? null : Math.floor((Date.now() - t) / 86400000);
+}
+
 export function fmtScore(n: number | null | undefined, digits = 0): string {
   return n === null || n === undefined ? "—" : n.toFixed(digits);
 }

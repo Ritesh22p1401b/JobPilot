@@ -1,299 +1,283 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { Download, RefreshCw, Upload } from "lucide-react";
-import { useRef, useState } from "react";
+import { Download, FileText, Gauge, Pencil, RefreshCw, Upload } from "lucide-react";
+import { useState } from "react";
 
-import { VersionStatusBadge } from "@/components/domain";
-import { Alert, Badge, Button, Card, CardBody, CardHeader, Empty, Loading, Meter, PageHeader, Spinner } from "@/components/ui";
+import { ResumeUploader } from "@/components/resume/uploader";
+import { Badge, Button, ButtonLink, Callout, Card, CardBody, CardHeader, Chip, EmptyState, ErrorState, Meter, PageHeader, PageSkeleton, ScoreRing } from "@/components/ui";
+import { Dialog } from "@/components/ui/dialog";
+import { useToast } from "@/components/ui/toast";
 import { ApiError, api, download } from "@/lib/api";
+import { errorText } from "@/lib/errors";
 import { useResume } from "@/lib/hooks";
 import * as S from "@/lib/schemas";
-import { cn, fmtDateTime, humanize } from "@/lib/utils";
+import { fmtDateTime } from "@/lib/utils";
 
-const ACCEPT = ".pdf,.docx,.txt";
-const MAX_MB = 5; // keep in sync with MAX_UPLOAD_BYTES on the backend
+const num = (v: unknown) => (typeof v === "number" ? v : 0);
 
-function Uploader({ compact }: { compact?: boolean }) {
-  const qc = useQueryClient();
-  const input = useRef<HTMLInputElement>(null);
-  const [drag, setDrag] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{ skills: number; experience_entries: number; warnings: string[] } | null>(null);
+/** Parsing-risk checks derived from the layout the backend measured (text_extraction.py). */
+function layoutRisks(layout: Record<string, unknown>): [string, boolean, string][] {
+  if (layout.plain_text) return [];
+  return [
+    ["Multi-column layout", num(layout.multi_column_pages) > 0, "Columns are often read in the wrong order."],
+    ["Tables", num(layout.tables) > 0, "Some parsers skip or scramble table cells."],
+    ["Images or graphics", num(layout.images) + num(layout.graphics) > 0, "Text inside images can’t be read."],
+    ["Text boxes", num(layout.text_boxes) > 0, "Text-box content is invisible to many parsers."],
+    ["Text in header or footer", Array.isArray(layout.header_footer_text) ? layout.header_footer_text.length > 0 : !!layout.header_footer_text, "Contact details in headers are often missed."],
+    ["Very small fonts", num(layout.small_font_ratio) > 0.1, "Fonts under 8.5pt can be hard to extract."],
+    ["Scanned / image-based", !!layout.image_based, "Needs OCR; export a text-based PDF instead."],
+  ];
+}
 
-  const upload = async (file: File) => {
-    setError(null);
-    setResult(null);
-    if (!/\.(pdf|docx|txt)$/i.test(file.name)) return setError("Upload a PDF, DOCX or TXT file.");
-    if (file.size > MAX_MB * 1024 * 1024) return setError(`File is larger than ${MAX_MB} MB.`);
-    const fd = new FormData();
-    fd.append("file", file);
-    setBusy(true);
-    try {
-      const out = await api(S.UploadOut, "POST", "/resume/upload", fd);
-      setResult(out);
-      for (const key of [["resume"], ["me"], ["dashboard"], ["versions"], ["profile"]]) void qc.invalidateQueries({ queryKey: key });
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Upload failed");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div>
-      <div
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDrag(true);
-        }}
-        onDragLeave={() => setDrag(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDrag(false);
-          const f = e.dataTransfer.files[0];
-          if (f) void upload(f);
-        }}
-        className={cn(
-          "flex flex-col items-center justify-center rounded-lg border-2 border-dashed text-center transition-colors",
-          compact ? "px-4 py-5" : "px-6 py-12",
-          drag ? "border-primary bg-info-soft" : "border-border",
-        )}
-      >
-        {busy ? (
-          <div className="flex items-center gap-2 text-sm">
-            <Spinner /> Parsing your resume…
-          </div>
-        ) : (
-          <>
-            {!compact && <Upload className="mb-3 h-6 w-6 text-muted-foreground" />}
-            <p className="text-sm">
-              Drag your resume here, or{" "}
-              <button className="font-medium text-primary" onClick={() => input.current?.click()}>
-                choose a file
-              </button>
-            </p>
-            <p className="mt-1 text-xs text-muted-foreground">PDF, DOCX or TXT · up to {MAX_MB} MB</p>
-          </>
-        )}
-        <input
-          ref={input}
-          type="file"
-          accept={ACCEPT}
-          className="hidden"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) void upload(f);
-            e.target.value = "";
-          }}
-        />
-      </div>
-      {error && <Alert tone="danger" className="mt-3">{error}</Alert>}
-      {result && (
-        <Alert tone="success" className="mt-3" title="Resume parsed">
-          Found {result.skills} skills and {result.experience_entries} experience entries. Jobs will be re-scored in the background.
-          {result.warnings.length > 0 && (
-            <ul className="mt-1 list-disc pl-4">
-              {result.warnings.map((w) => (
-                <li key={w}>{w}</li>
-              ))}
-            </ul>
-          )}
-        </Alert>
-      )}
-    </div>
-  );
+function Risk({ present }: { present: boolean }) {
+  return present ? <Badge tone="warning">⚠ Yes</Badge> : <Badge tone="success">✓ No</Badge>;
 }
 
 export default function ResumePage() {
   const resume = useResume();
   const qc = useQueryClient();
+  const toast = useToast();
+  const [replacing, setReplacing] = useState(false);
   const [reparsing, setReparsing] = useState(false);
-  const noResume = resume.error instanceof ApiError && resume.error.status === 409; // no candidate profile yet
+  const noResume = resume.error instanceof ApiError && resume.error.status === 409;
 
-  if (resume.isLoading) return <Loading />;
-  if (noResume || !resume.data)
+  if (resume.isLoading) return <PageSkeleton rows={3} />;
+  if (noResume)
     return (
       <>
-        <PageHeader title="Resume" description="Your uploaded resume becomes your master resume. It is never modified by JobPilot." />
-        <Uploader />
+        <PageHeader title="Base Resume" description="Your uploaded resume becomes your base resume. JobPilot never modifies it." />
+        <Card className="p-6">
+          <ResumeUploader />
+        </Card>
       </>
     );
+  if (resume.error || !resume.data) return <ErrorState error={resume.error} onRetry={() => resume.refetch()} />;
 
   const { master_version: mv, file, profile, warnings } = resume.data;
-  const layout = file?.layout ?? {};
-  const layoutFlags = Object.entries(layout).filter(([, v]) => typeof v === "boolean" || typeof v === "number");
+  const layout = (file?.layout ?? {}) as Record<string, unknown>;
+  const risks = layoutRisks(layout);
 
   const reparse = async () => {
     setReparsing(true);
     try {
       await api(S.Ok, "POST", "/resume/reparse");
       void qc.invalidateQueries({ queryKey: ["resume"] });
+      toast({ tone: "success", title: "Resume re-parsed" });
+    } catch (e) {
+      toast({ tone: "error", title: "Couldn’t re-parse", body: errorText(e) });
     } finally {
       setReparsing(false);
     }
   };
 
+  const demonstrated = profile?.skills.filter((s) => s.sections.some((x) => x !== "skills" && x !== "certifications")) ?? [];
+  const listedOnly = profile?.skills.filter((s) => !demonstrated.includes(s)) ?? [];
+
   return (
     <>
       <PageHeader
-        title="Resume"
-        description="Your master resume is immutable. Edits in Profile create a new master version, and tailoring always creates separate versions."
+        title="Base Resume"
+        description="Your complete, verified resume and the single source of truth for everything JobPilot does. It is never modified by AI; tailoring always creates a separate version."
         action={
-          mv && (
-            <>
-              <Button variant="outline" onClick={reparse} loading={reparsing}>
-                <RefreshCw className="h-4 w-4" /> Re-parse
-              </Button>
-              {mv.has_original && (
-                <Button variant="outline" onClick={() => download(`/resume/${mv.id}/download?format=original`, file?.filename ?? "resume")}>
-                  <Download className="h-4 w-4" /> Original
-                </Button>
-              )}
-              <Button variant="outline" onClick={() => download(`/resume/${mv.id}/download?format=docx`, "resume.docx")}>
-                <Download className="h-4 w-4" /> DOCX
-              </Button>
-              <Button variant="outline" onClick={() => download(`/resume/${mv.id}/download?format=pdf`, "resume.pdf")}>
-                <Download className="h-4 w-4" /> PDF
-              </Button>
-            </>
-          )
+          <>
+            <Button variant="secondary" onClick={() => setReplacing(true)}>
+              <Upload className="h-4 w-4" /> Replace
+            </Button>
+            <ButtonLink href="/profile" variant="secondary">
+              <Pencil className="h-4 w-4" /> Edit facts
+            </ButtonLink>
+            {mv && (
+              <ButtonLink href="/ats">
+                <Gauge className="h-4 w-4" /> ATS scan
+              </ButtonLink>
+            )}
+          </>
         }
       />
+      <Dialog open={replacing} onClose={() => setReplacing(false)} title="Upload a new resume" description="Creates a new base version. Earlier versions and tailored resumes are kept.">
+        <ResumeUploader
+          onDone={() => {
+            setReplacing(false);
+            toast({ tone: "success", title: "New base resume uploaded", body: "Jobs are being re-scored in the background." });
+          }}
+        />
+      </Dialog>
 
       {warnings.length > 0 && (
-        <Alert tone="warning" className="mb-5" title="Parsing warnings">
+        <Callout tone="warning" className="mb-5" title="Please check these parsed details">
           <ul className="list-disc pl-4">
             {warnings.map((w) => (
               <li key={w}>{w}</li>
             ))}
           </ul>
-        </Alert>
+        </Callout>
       )}
 
-      <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
+      <div className="grid gap-5 xl:grid-cols-[1fr_340px]">
         <div className="min-w-0 space-y-5">
-          {profile && (
+          {profile ? (
             <Card>
-              <CardHeader title={profile.contact.name ?? "Parsed profile"} description={[profile.contact.email, profile.contact.phone, profile.contact.location].filter(Boolean).join(" · ")} />
-              <CardBody className="space-y-5 text-sm">
-                {profile.summary && <p className="text-muted-foreground">{profile.summary}</p>}
+              <CardHeader title={profile.contact.name ?? "Your profile"} description={[profile.contact.email, profile.contact.phone, profile.contact.location].filter(Boolean).join(" · ")} />
+              <CardBody className="space-y-6">
+                {profile.summary && <p className="text-sm leading-relaxed text-subtle">{profile.summary}</p>}
                 <div>
-                  <div className="mb-1.5 text-xs font-medium text-muted-foreground">Skills ({profile.skills.length})</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {profile.skills.map((s) => (
-                      <Badge key={s.name} tone={s.sections.some((x) => x !== "skills" && x !== "certifications") ? "info" : "neutral"} title={`Evidenced in: ${s.sections.join(", ") || "skills list"}`}>
-                        {s.name}
-                      </Badge>
-                    ))}
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-[11px] font-semibold tracking-wider text-muted uppercase">Skills shown in your experience or projects ({demonstrated.length})</span>
                   </div>
-                  <p className="mt-1.5 text-xs text-muted-foreground">Blue: shown in your experience or projects. Grey: listed only.</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {demonstrated.map((s) => (
+                      <Chip key={s.name} tone="success" title={`Evidenced in: ${s.sections.join(", ")}`}>
+                        ✓ {s.name}
+                      </Chip>
+                    ))}
+                    {!demonstrated.length && <span className="text-sm text-muted">None found in bullets.</span>}
+                  </div>
                 </div>
+                {listedOnly.length > 0 && (
+                  <div>
+                    <div className="mb-2 text-[11px] font-semibold tracking-wider text-muted uppercase">Listed only ({listedOnly.length})</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {listedOnly.map((s) => (
+                        <Chip key={s.name}>{s.name}</Chip>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-xs text-muted">These count as weaker evidence. Mention them in a real bullet where you’ve used them.</p>
+                  </div>
+                )}
                 <div>
-                  <div className="mb-2 text-xs font-medium text-muted-foreground">Experience</div>
-                  <ul className="space-y-3">
+                  <div className="mb-3 text-[11px] font-semibold tracking-wider text-muted uppercase">Experience</div>
+                  <ol className="space-y-4">
                     {profile.experience.map((e) => (
-                      <li key={e.id}>
-                        <div className="font-medium">
-                          {e.title} {e.company && <span className="font-normal text-muted-foreground">· {e.company}</span>}
-                          {e.is_internship && <Badge className="ml-2">Internship</Badge>}
+                      <li key={e.id} className="border-l-2 border-border pl-4">
+                        <div className="flex flex-wrap items-baseline justify-between gap-2">
+                          <div className="font-medium">
+                            {e.title} {e.company && <span className="font-normal text-subtle">· {e.company}</span>}
+                            {e.is_internship && <Badge className="ml-2">Internship</Badge>}
+                          </div>
+                          <span className="text-xs text-muted">
+                            {e.start_date ?? "?"} – {e.current ? "Present" : (e.end_date ?? "?")}
+                          </span>
                         </div>
-                        <div className="text-xs text-muted-foreground">
-                          {e.start_date ?? "?"} – {e.current ? "Present" : (e.end_date ?? "?")}
-                        </div>
-                        <ul className="mt-1 list-disc space-y-0.5 pl-5 text-muted-foreground">
+                        <ul className="mt-1.5 list-disc space-y-1 pl-5 text-[13px] text-subtle">
                           {e.bullets.map((b, i) => (
                             <li key={i}>{b}</li>
                           ))}
                         </ul>
                       </li>
                     ))}
-                  </ul>
+                  </ol>
                 </div>
                 {profile.projects.length > 0 && (
                   <div>
-                    <div className="mb-2 text-xs font-medium text-muted-foreground">Projects</div>
-                    <ul className="space-y-2">
+                    <div className="mb-3 text-[11px] font-semibold tracking-wider text-muted uppercase">Projects</div>
+                    <div className="space-y-3">
                       {profile.projects.map((p) => (
-                        <li key={p.id}>
+                        <div key={p.id}>
                           <div className="font-medium">{p.name}</div>
-                          <ul className="list-disc pl-5 text-muted-foreground">
+                          <ul className="mt-1 list-disc space-y-1 pl-5 text-[13px] text-subtle">
                             {p.bullets.map((b, i) => (
                               <li key={i}>{b}</li>
                             ))}
                           </ul>
-                        </li>
+                        </div>
                       ))}
-                    </ul>
+                    </div>
                   </div>
                 )}
                 {profile.education.length > 0 && (
                   <div>
-                    <div className="mb-2 text-xs font-medium text-muted-foreground">Education</div>
+                    <div className="mb-2 text-[11px] font-semibold tracking-wider text-muted uppercase">Education</div>
                     {profile.education.map((e) => (
-                      <div key={e.id}>
-                        {e.degree} {e.field && `in ${e.field}`} <span className="text-muted-foreground">· {e.institution}</span>
+                      <div key={e.id} className="text-sm">
+                        {[e.degree, e.field && `in ${e.field}`].filter(Boolean).join(" ")} <span className="text-subtle">· {e.institution}</span>
                       </div>
                     ))}
                   </div>
                 )}
               </CardBody>
             </Card>
+          ) : (
+            <EmptyState title="No parsed profile" />
           )}
           <Card>
-            <CardHeader title="Extracted text" description="What JobPilot (and a typical ATS parser) reads from your file." />
+            <CardHeader title="Extracted text" description="What JobPilot, and a typical ATS parser, reads from your file." />
             <CardBody>
-              <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 text-xs">{resume.data.raw_text_preview || "—"}</pre>
+              <pre className="scrollbar-thin max-h-96 overflow-auto rounded-lg border border-border bg-background p-4 font-mono text-xs whitespace-pre-wrap text-subtle">{resume.data.raw_text_preview || "—"}</pre>
             </CardBody>
           </Card>
         </div>
 
-        <div className="space-y-5">
+        <aside className="space-y-5">
           {mv && (
-            <Card>
-              <CardHeader title="Master version" action={<VersionStatusBadge status={mv.status} />} />
-              <CardBody className="space-y-3">
-                <div className="text-sm">
-                  v{mv.version_number} · {mv.label}
-                  <div className="text-xs text-muted-foreground">{fmtDateTime(mv.created_at)}</div>
+            <Card className="p-5">
+              <div className="flex items-center gap-4">
+                <ScoreRing score={mv.quality_index} size={84} label="ATS" />
+                <div>
+                  <div className="font-medium">Base resume · v{mv.version_number}</div>
+                  <div className="text-xs text-muted">{fmtDateTime(mv.created_at)}</div>
                 </div>
-                <Meter label="Quality index" value={mv.quality_index} />
+              </div>
+              <div className="mt-5 space-y-3">
                 <Meter label="Parser compatibility" value={mv.parser_score} />
                 <Meter label="Round-trip fidelity" value={mv.round_trip_score} />
                 <Meter label="Formatting" value={mv.formatting_score} />
-              </CardBody>
+              </div>
+              <div className="mt-5 flex flex-wrap gap-1.5">
+                {mv.has_original && (
+                  <Button size="sm" variant="secondary" onClick={() => download(`/resume/${mv.id}/download?format=original`, file?.filename ?? "resume")}>
+                    <Download className="h-3.5 w-3.5" /> Original
+                  </Button>
+                )}
+                <Button size="sm" variant="secondary" onClick={() => download(`/resume/${mv.id}/download?format=docx`, "resume.docx")}>
+                  <Download className="h-3.5 w-3.5" /> ATS-safe DOCX
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => download(`/resume/${mv.id}/download?format=pdf`, "resume.pdf")}>
+                  <Download className="h-3.5 w-3.5" /> PDF
+                </Button>
+              </div>
             </Card>
           )}
           {file && (
             <Card>
-              <CardHeader title="Uploaded file" />
-              <CardBody className="space-y-1 text-sm">
-                <div className="truncate font-medium">{file.filename}</div>
-                <div className="text-xs text-muted-foreground">
-                  {file.type.toUpperCase()} · {(file.size / 1024).toFixed(0)} KB · {fmtDateTime(file.uploaded_at)}
+              <CardHeader
+                title="Uploaded file"
+                icon={<FileText className="h-4 w-4" />}
+                action={
+                  <Button size="sm" variant="ghost" onClick={reparse} loading={reparsing}>
+                    <RefreshCw className="h-3.5 w-3.5" /> Re-parse
+                  </Button>
+                }
+              />
+              <CardBody className="space-y-3 text-sm">
+                <div>
+                  <div className="truncate font-medium">{file.filename}</div>
+                  <div className="text-xs text-muted">
+                    {file.type.toUpperCase()} · {(file.size / 1024).toFixed(0)} KB · {fmtDateTime(file.uploaded_at)}
+                  </div>
                 </div>
-                {layoutFlags.length > 0 && (
-                  <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 border-t pt-2 text-xs">
-                    {layoutFlags.map(([k, v]) => (
-                      <div key={k} className="contents">
-                        <dt className="text-muted-foreground">{humanize(k)}</dt>
-                        <dd className="text-right">{typeof v === "boolean" ? (v ? "Yes" : "No") : String(v)}</dd>
-                      </div>
-                    ))}
-                  </dl>
+                {risks.length > 0 ? (
+                  <div>
+                    <div className="mb-2 text-[11px] font-semibold tracking-wider text-muted uppercase">ATS layout risks</div>
+                    <dl className="space-y-1.5">
+                      {risks.map(([label, present, why]) => (
+                        <div key={label} className="flex items-center justify-between gap-2 text-[13px]" title={why}>
+                          <dt className="text-subtle">{label}</dt>
+                          <dd>
+                            <Risk present={present} />
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                    {risks.some(([, p]) => p) && <p className="mt-2 text-xs text-muted">JobPilot’s generated DOCX/PDF avoid these risks; download the ATS-safe DOCX to use when applying.</p>}
+                  </div>
+                ) : (
+                  <p className="text-[13px] text-subtle">Plain text: no layout risks.</p>
                 )}
               </CardBody>
             </Card>
           )}
-          <Card>
-            <CardHeader title="Upload a new resume" description="Creates a new master version. Older versions are kept." />
-            <CardBody>
-              <Uploader compact />
-            </CardBody>
-          </Card>
-          {!profile && <Empty title="No parsed profile" />}
-        </div>
+        </aside>
       </div>
     </>
   );

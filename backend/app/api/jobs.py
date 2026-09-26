@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -14,7 +15,7 @@ from app.api.deps import agent_limiter, current_candidate
 from app.api.serializers import job_out, match_out, task_out
 from app.database import get_db, utcnow
 from app.events.bus import publish
-from app.models import CandidateProfile, Job, JobMatch
+from app.models import CandidateProfile, Job, JobMatch, JobSkill
 from app.providers.registry import destination_links
 from app.schemas.job import RawJob
 from app.services.evidence import build_evidence_matrix
@@ -27,7 +28,10 @@ router = APIRouter(tags=["jobs"])
 async def list_jobs(candidate: CandidateProfile = Depends(current_candidate), db: AsyncSession = Depends(get_db),
                     q: str | None = None, source: str | None = None, min_score: float | None = None,
                     saved: bool | None = None, include_filtered: bool = False, include_dismissed: bool = False,
-                    remote: bool | None = None, sort: str = Query("score", pattern="^(score|recent)$"),
+                    remote: bool | None = None, sort: str = Query("score", pattern="^(score|recent|salary)$"),
+                    location: str | None = None, company: str | None = None, skill: str | None = None,
+                    employment_type: str | None = None, seniority: str | None = None,
+                    posted_within_days: int | None = Query(None, ge=1, le=365), min_salary: float | None = None,
                     page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100)) -> dict:
     stmt = (select(Job, JobMatch).outerjoin(JobMatch, and_(JobMatch.job_id == Job.id, JobMatch.candidate_id == candidate.id))
             .where(Job.duplicate_of_id.is_(None)))
@@ -39,6 +43,21 @@ async def list_jobs(candidate: CandidateProfile = Depends(current_candidate), db
         stmt = stmt.where(Job.source == source)
     if remote is not None:
         stmt = stmt.where(Job.remote.is_(remote))
+    if location:
+        stmt = stmt.where(func.lower(Job.location).like(f"%{location.lower()}%"))
+    if company:
+        stmt = stmt.where(func.lower(Job.company) == company.lower())
+    if employment_type:
+        stmt = stmt.where(Job.employment_type == employment_type)
+    if seniority:
+        stmt = stmt.where(Job.seniority == seniority)
+    if skill:
+        stmt = stmt.where(Job.id.in_(select(JobSkill.job_id).where(func.lower(JobSkill.skill) == skill.lower())))
+    if posted_within_days:
+        since = utcnow() - timedelta(days=posted_within_days)
+        stmt = stmt.where(func.coalesce(Job.posted_at, Job.first_seen_at) >= since)
+    if min_salary is not None:
+        stmt = stmt.where(func.coalesce(Job.salary_max, Job.salary_min) >= min_salary)
     if min_score is not None:
         stmt = stmt.where(JobMatch.overall_score >= min_score)
     if saved:
@@ -48,7 +67,12 @@ async def list_jobs(candidate: CandidateProfile = Depends(current_candidate), db
     if not include_dismissed:
         stmt = stmt.where(or_(JobMatch.id.is_(None), JobMatch.dismissed.is_(False)))
     total = (await db.execute(select(func.count()).select_from(stmt.subquery()))).scalar() or 0
-    order: list[Any] = [JobMatch.overall_score.desc().nullslast(), Job.first_seen_at.desc()] if sort == "score" else [Job.first_seen_at.desc()]
+    orders: dict[str, list[Any]] = {
+        "score": [JobMatch.overall_score.desc().nullslast(), Job.first_seen_at.desc()],
+        "recent": [func.coalesce(Job.posted_at, Job.first_seen_at).desc()],
+        "salary": [func.coalesce(Job.salary_max, Job.salary_min).desc().nullslast(), JobMatch.overall_score.desc().nullslast()],
+    }
+    order = orders[sort]
     rows = (await db.execute(stmt.order_by(*order).offset((page - 1) * page_size).limit(page_size))).all()
     return {"total": total, "page": page, "page_size": page_size, "jobs": [job_out(j, m) for j, m in rows]}
 

@@ -149,7 +149,8 @@ class ApproveRequest(BaseModel):
 
 async def approve_application(db: AsyncSession, app: Application, req: ApproveRequest, actor: str = "user") -> Application:
     prev = app.status
-    answers = list(app.answers_json or [])
+    # Copy each dict: mutating the loaded JSON in place makes SQLAlchemy see "no change" and skip the UPDATE.
+    answers = [dict(a) for a in app.answers_json or []]
     for a in answers:
         if a["question"] in req.answers:
             val = req.answers[a["question"]]

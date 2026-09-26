@@ -55,7 +55,12 @@ async function raw(method: Method, path: string, body?: unknown): Promise<Respon
     headers["Content-Type"] = "application/json";
     payload = JSON.stringify(body);
   }
-  const res = await fetch(`${BASE}${path}`, { method, headers, body: payload });
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}${path}`, { method, headers, body: payload });
+  } catch {
+    throw new ApiError(0, "Network request failed");
+  }
   if (res.status === 401 && token) setToken(null);
   if (!res.ok) {
     const data = await res.json().catch(() => null);

@@ -12,6 +12,12 @@ def iso(dt: datetime | None) -> str | None:
     return dt.isoformat() if dt else None
 
 
+def _top_skills(job: Job, limit: int = 6) -> list[str]:
+    """Required skills first, then preferred, from the stored JD analysis (empty until the job is analyzed)."""
+    a = job.jd_analysis_json or {}
+    return list(dict.fromkeys([*(a.get("required_skills") or []), *(a.get("preferred_skills") or [])]))[:limit]
+
+
 def job_out(job: Job, match: JobMatch | None = None, include_description: bool = False) -> dict:
     data: dict[str, Any] = {
         "id": job.id, "job_id": f"{job.source}:{job.external_id}", "source": job.source, "company": job.company,
@@ -22,6 +28,7 @@ def job_out(job: Job, match: JobMatch | None = None, include_description: bool =
         "last_seen_at": iso(job.last_seen_at), "description_truncated": job.description_truncated,
         "alternate_sources": job.alternate_sources_json or [], "duplicate_of_id": job.duplicate_of_id,
         "salary_is_predicted": bool((job.raw_json or {}).get("salary_is_predicted")),
+        "skills": _top_skills(job),
     }
     if include_description:
         data["description"] = job.description
@@ -56,7 +63,8 @@ def version_out(v: ResumeVersion) -> dict:
     }
 
 
-def application_out(a: Application, job: Job | None = None, events: list[ApplicationEvent] | None = None) -> dict:
+def application_out(a: Application, job: Job | None = None, events: list[ApplicationEvent] | None = None,
+                    match: JobMatch | None = None) -> dict:
     data = {
         "id": a.id, "job_id": a.job_id, "status": a.status, "mode": a.mode, "applied_at": iso(a.applied_at),
         "application_url": a.application_url, "resume_version_id": a.resume_version_id, "cover_letter": a.cover_letter,
@@ -65,7 +73,7 @@ def application_out(a: Application, job: Job | None = None, events: list[Applica
         "updated_at": iso(a.updated_at),
     }
     if job is not None:
-        data["job"] = job_out(job)
+        data["job"] = job_out(job, match)
     if events is not None:
         data["events"] = [{"id": e.id, "actor": e.actor, "action": e.action, "from_status": e.from_status,
                            "to_status": e.to_status, "details": e.details_json, "notes": e.notes,

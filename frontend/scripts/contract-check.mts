@@ -2,7 +2,7 @@
  * End-to-end contract check: drives the real backend through the Next.js proxy and validates every
  * response with the same Zod schemas the UI uses. Run with the API and `next start` up:
  *
- *   npm run check:contract -- [baseUrl] [resumePath]
+ *   node --no-warnings scripts/contract-check.mts [baseUrl] [resumePath]
  *
  * Creates a throwaway user and runs a live job search (public job-board APIs), so it takes a few minutes.
  */
@@ -84,6 +84,8 @@ await call(S.Ready, "GET", "/health/ready");
 await call(S.SourceList, "GET", "/sources");
 await call(S.LlmHealth, "GET", "/system/llm");
 await call(S.AgentRuns, "GET", "/agents/runs?limit=25");
+await call(S.Insights, "GET", "/insights");
+await call(S.JobList, "GET", "/jobs?location=bengaluru&posted_within_days=30&sort=salary&employment_type=full_time");
 
 const imported = await call(S.ImportOut, "POST", "/jobs/import", {
   title: "LLM Engineer",
@@ -137,6 +139,11 @@ const approved = await call(S.Application, "POST", `/applications/${jobId}/appro
 });
 if (approved.status === "READY") await call(S.SubmitOut, "POST", `/applications/${jobId}/submit`);
 await call(S.Application, "PATCH", `/applications/${prep.application_id}`, { status: "APPLIED", notes: "applied on employer site" });
+const after = await call(S.Insights, "GET", "/insights");
+if (after.funnel.applied < 1) {
+  failures++;
+  console.error("✗ insights funnel did not count the application");
+}
 
 const profile = (await call(S.ProfileOut, "GET", "/profile")).profile;
 await call(S.ProfileUpdateOut, "PATCH", "/profile", { languages: [...profile.languages, "English"] });

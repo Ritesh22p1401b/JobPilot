@@ -257,6 +257,7 @@ export const Job = z.object({
   alternate_sources: z.array(z.unknown()).default([]),
   duplicate_of_id: str,
   salary_is_predicted: z.boolean().default(false),
+  skills: z.array(z.string()).default([]),
   match: Match.optional(),
 });
 export type Job = z.infer<typeof Job>;
@@ -380,7 +381,11 @@ export const ResumeContent = z
     experience: z
       .array(z.object({ source_id: z.string(), title: str, company: str, location: str, start_date: str, end_date: str, bullets: z.array(Bullet).default([]) }).passthrough())
       .default([]),
-    projects: z.array(z.object({ source_id: z.string(), name: z.string(), bullets: z.array(Bullet).default([]) }).passthrough()).default([]),
+    projects: z.array(z.object({ source_id: z.string(), name: z.string(), url: str, bullets: z.array(Bullet).default([]) }).passthrough()).default([]),
+    education: z.array(Education).default([]),
+    certifications: z.array(Certification).default([]),
+    achievements: z.array(z.string()).default([]),
+    section_order: z.array(z.string()).default([]),
     template: z.string(),
   })
   .passthrough();
@@ -568,3 +573,69 @@ export const AgentRuns = z.object({
   ),
 });
 export const Ok = z.object({}).passthrough();
+
+// ---------------------------------------------------------------- insights (aggregates of your own data)
+export const BriefItem = z.object({
+  kind: z.string(),
+  tone: z.string(),
+  count: z.number(),
+  text: z.string(),
+  action: z.object({ label: z.string(), href: z.string() }),
+});
+export const Insights = z.object({
+  generated_at: z.string(),
+  kpis: z.object({
+    high_matches: z.number(),
+    saved: z.number(),
+    applications: z.number(),
+    interviews: z.number(),
+    follow_ups_due: z.number(),
+    high_threshold: z.number(),
+  }),
+  brief: z.array(BriefItem),
+  funnel: z.object({
+    saved: z.number(),
+    applied: z.number(),
+    responses: z.number(),
+    interviews: z.number(),
+    offers: z.number(),
+    response_rate: num,
+    interview_rate: num,
+  }),
+  resume_performance: z.array(
+    z.object({
+      resume_version_id: z.string(),
+      label: z.string(),
+      version_number: num,
+      applications: z.number(),
+      responses: z.number(),
+      interviews: z.number(),
+      response_rate: num,
+      interview_rate: num,
+    }),
+  ),
+  skill_gaps: z.object({
+    based_on_postings: z.number(),
+    gaps: z.array(z.object({ skill: z.string(), required_in: z.number(), preferred_in: z.number(), share: z.number(), demand: z.string() })),
+    strengths: z.array(z.object({ skill: z.string(), postings: z.number() })),
+  }),
+  market_skills: z.object({
+    based_on_postings: z.number(),
+    skills: z.array(z.object({ skill: z.string(), postings: z.number(), share: z.number(), you_have: z.boolean() })),
+  }),
+  companies: z.array(
+    z.object({
+      company: z.string(),
+      open_roles: z.number(),
+      matching_roles: z.number(),
+      best_score: num,
+      saved: z.number(),
+      applications: z.number(),
+      sources: z.array(z.string()),
+    }),
+  ),
+  follow_ups: z.array(
+    z.object({ application_id: z.string(), job_id: z.string(), title: z.string(), company: z.string(), applied_at: z.string(), days_since_activity: z.number() }),
+  ),
+});
+export type Insights = z.infer<typeof Insights>;
