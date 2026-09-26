@@ -7,6 +7,8 @@ Duplicates are stored with `duplicate_of_id` so every source URL is preserved.
 
 from __future__ import annotations
 
+import asyncio
+
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -114,7 +116,7 @@ class NormalizationAgent(BaseAgent):
                 touched.append(job.id)
         await db.commit()
         if to_embed:  # one batched model call for all new/changed jobs
-            vectors = embed_texts([job_embedding_text(j.title, j.company, j.description) for j in to_embed])
+            vectors = await asyncio.to_thread(embed_texts, [job_embedding_text(j.title, j.company, j.description) for j in to_embed])
             for j, vec in zip(to_embed, vectors, strict=True):
                 await store.upsert(JOBS, j.id, vec, {"source": j.source, "company": j.company, "title": j.title})
         touched = list(dict.fromkeys(touched))

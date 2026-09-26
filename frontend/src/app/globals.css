@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+/* Design tokens (shadcn-style), light by default, dark via the OS setting. */
+:root {
+  --background: #f7f8fa;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --muted: #eef1f5;
+  --muted-foreground: #5b6474;
+  --border: #e2e6ec;
+  --primary: #2952cc;
+  --primary-foreground: #ffffff;
+  --success: #15803d;
+  --success-soft: #e7f6ec;
+  --warning: #b45309;
+  --warning-soft: #fdf3e2;
+  --danger: #b91c1c;
+  --danger-soft: #fdecec;
+  --info-soft: #e8eefc;
+  --ring: #2952cc55;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0b0f17;
+    --foreground: #e5e9f0;
+    --card: #121826;
+    --muted: #1a2130;
+    --muted-foreground: #97a1b3;
+    --border: #252e40;
+    --primary: #7b9bff;
+    --primary-foreground: #0b0f17;
+    --success: #4ade80;
+    --success-soft: #12291c;
+    --warning: #fbbf24;
+    --warning-soft: #2c2210;
+    --danger: #f87171;
+    --danger-soft: #2e1515;
+    --info-soft: #172241;
+    --ring: #7b9bff55;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-info-soft: var(--info-soft);
+  --color-ring: var(--ring);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+html,
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  border-color: var(--border);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

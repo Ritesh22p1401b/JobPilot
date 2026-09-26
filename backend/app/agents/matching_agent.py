@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,18 +61,22 @@ class MatchingAgent(BaseAgent):
             select(JobMatch).where(JobMatch.candidate_id == candidate.id, JobMatch.job_id.in_([j.id for j in jobs]))
         )).scalars()} if jobs else {}
 
-        # Pre-compute everything the scorer embeds in a few batched model calls.
         analyses = {job.id: await ensure_job_analysis(db, job) for job in jobs}
+        hashes = {job.id: match_input_hash(profile, prefs, job.content_hash, analyses[job.id].analyzer_version) for job in jobs}
+        stale = [j for j in jobs if (m := existing.get(j.id)) is None or m.input_hash != hashes[j.id]]
+
+        # Pre-compute everything the scorer embeds in a few batched model calls. Model inference runs in a
+        # thread (ONNX releases the GIL) so the API stays responsive when the worker is embedded in it.
         bullets = [b for e in profile.experience for b in e.bullets] + [b for p in profile.projects for b in p.bullets]
-        warm = bullets + [r for a in analyses.values() for r in a.responsibilities]
-        warm += [norm_title(j.title) for j in jobs] + [norm_title(t) for t in (prefs.target_titles + profile.target_roles)]
-        if warm:
-            embed_texts([w for w in warm if w.strip()])
-        job_vectors = await store.get_vectors(JOBS, [j.id for j in jobs])
-        missing_vec = [j for j in jobs if j.id not in job_vectors]
+        warm = bullets + [r for j in stale for r in analyses[j.id].responsibilities]
+        warm += [norm_title(j.title) for j in stale] + [norm_title(t) for t in (prefs.target_titles + profile.target_roles)]
+        if stale and warm:
+            await asyncio.to_thread(embed_texts, [w for w in warm if w.strip()])
+        job_vectors = await store.get_vectors(JOBS, [j.id for j in stale])
+        missing_vec = [j for j in stale if j.id not in job_vectors]
         if missing_vec:
-            for job, vec in zip(missing_vec, embed_texts([job_embedding_text(j.title, j.company, j.description) for j in missing_vec]),
-                                strict=True):
+            vectors = await asyncio.to_thread(embed_texts, [job_embedding_text(j.title, j.company, j.description) for j in missing_vec])
+            for job, vec in zip(missing_vec, vectors, strict=True):
                 job_vectors[job.id] = vec
                 await store.upsert(JOBS, job.id, vec, {"source": job.source, "company": job.company, "title": job.title})
 
@@ -80,13 +86,14 @@ class MatchingAgent(BaseAgent):
         excluded = {c.lower() for c in prefs.excluded_companies}
         for job in jobs:
             analysis = analyses[job.id]
-            ih = match_input_hash(profile, prefs, job.content_hash, analysis.analyzer_version)
+            ih = hashes[job.id]
             m = existing.get(job.id)
             if m is not None and m.input_hash == ih:
                 reused += 1
                 passed += int(m.hard_filter_passed)
                 above += int(m.hard_filter_passed and m.overall_score >= prefs.minimum_match_score)
                 continue
+            await asyncio.sleep(0)  # scoring is CPU-bound; yield so API requests aren't starved
             sim = cosine(cand_vec, job_vectors[job.id])
             matrix = build_evidence_matrix(analysis, profile, prefs)
             result = compute_match(job_facts(job), analysis, matrix, profile, prefs, semantic_similarity=sim)
