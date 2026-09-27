@@ -54,6 +54,7 @@ function LlmSettings() {
   const [error, setError] = useState<string | null>(null);
   const save = useApiMutation((body: { base_url: string; model: string; api_key?: string }) => api(S.LlmHealth, "PUT", "/system/llm", body), [["ready"]]);
   const test = useApiMutation(() => api(S.LlmTest, "POST", "/system/llm/test"));
+  const resetToEnv = useApiMutation(() => api(S.LlmHealth, "PUT", "/system/llm", { base_url: "", model: "" }), [["ready"]]);
 
   useEffect(() => {
     if (status.data) setForm((f) => ({ ...f, base_url: status.data.base_url ?? "", model: status.data.model ?? "qwen3:8b" }));
@@ -73,6 +74,17 @@ function LlmSettings() {
     }
   };
 
+  const onUseEnv = async () => {
+    setError(null);
+    try {
+      const out = await resetToEnv.mutateAsync(undefined);
+      qc.setQueryData(["llm"], out);
+      toast({ tone: out.configured ? "success" : "info", title: out.configured ? "Using backend/.env" : "Saved URL removed", body: out.configured ? undefined : "LLM_BASE_URL in backend/.env is empty, so no model is connected." });
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+
   const s = status.data;
   return (
     <Card>
@@ -82,6 +94,13 @@ function LlmSettings() {
         action={s && <Badge tone={s.reachable ? "success" : s.configured ? "danger" : "warning"}>{s.reachable ? "● Connected" : s.configured ? "● Unreachable" : "● Not connected"}</Badge>}
       />
       <CardBody className="space-y-4">
+        {s && (
+          <Callout tone="info" title={s.source === "settings" ? "Using the URL saved here" : "Using backend/.env"}>
+            {s.source === "settings"
+              ? "A URL saved on this page overrides LLM_BASE_URL in backend/.env. Switch back to use the .env values."
+              : "LLM_BASE_URL, LLM_API_KEY and LLM_MODEL are read from backend/.env. Edits to that file apply within seconds; no restart needed. Saving here overrides them."}
+          </Callout>
+        )}
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="Base URL" htmlFor="llm-url" hint="“/v1” is added if missing.">
             <Input id="llm-url" value={form.base_url} placeholder="https://xxxx.trycloudflare.com/v1" onChange={(e) => setForm({ ...form, base_url: e.target.value })} />
@@ -111,6 +130,11 @@ function LlmSettings() {
           <Button variant="secondary" onClick={() => test.mutate(undefined)} loading={test.isPending} disabled={!s?.configured}>
             Test connection
           </Button>
+          {s?.source === "settings" && (
+            <Button variant="ghost" onClick={onUseEnv} loading={resetToEnv.isPending}>
+              Use backend/.env instead
+            </Button>
+          )}
         </div>
       </CardBody>
     </Card>

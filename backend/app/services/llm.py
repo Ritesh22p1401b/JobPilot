@@ -1,7 +1,8 @@
 """OpenAI-compatible LLM client (Ollama / vLLM / LM Studio / llama.cpp server).
 
 Designed for Qwen3-8B served from Google Colab behind a tunnel:
-* the base URL can be changed at runtime (Colab tunnels rotate each session);
+* the base URL can be changed at runtime (Colab tunnels rotate each session): either in Settings, or by editing
+  LLM_BASE_URL / LLM_API_KEY / LLM_MODEL in backend/.env, which is re-read when the file changes (no restart);
 * Qwen3 "thinking" is disabled with `/no_think` and any <think> block is stripped;
 * output is parsed as JSON and validated with Pydantic, with one repair round-trip.
 Raw LLM output is never trusted: callers get either a validated model or an exception.
@@ -14,12 +15,13 @@ import json
 import logging
 import re
 import time
+from pathlib import Path
 from typing import Any, TypeVar
 
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.logging_config import log_event
 from app.services.prompts import PromptSpec
 
@@ -99,10 +101,54 @@ class LLMConfig(BaseModel):
     base_url: str = ""
     model: str = ""
     api_key: str = ""
+    source: str = "env"  # "settings" (runtime override saved in the app) or "env" (environment / .env file)
 
     @property
     def enabled(self) -> bool:
         return bool(self.base_url)
+
+
+_LLM_ENV_FIELDS = ("llm_base_url", "llm_api_key", "llm_model")
+_env_mtimes: tuple[float, ...] | None = None
+
+
+def _env_files() -> list[Path]:
+    files = get_settings().model_config.get("env_file") or ()
+    return [Path(f) for f in (files if isinstance(files, tuple | list) else (files,))]
+
+
+def _refresh_env_llm() -> None:
+    """Pick up LLM_* edits in the .env files without a restart (Colab tunnel URLs change every session).
+
+    Only the LLM fields are reloaded, and only when a .env file's modification time changes. Real environment
+    variables still take precedence over the files, as at startup.
+    """
+    global _env_mtimes
+    files = _env_files()
+    mtimes: list[float] = []
+    for f in files:
+        try:
+            mtimes.append(f.stat().st_mtime)
+        except OSError:
+            mtimes.append(0.0)
+    current = tuple(mtimes)
+    if _env_mtimes is None:
+        _env_mtimes = current  # baseline: startup already read these files
+        return
+    if current == _env_mtimes:
+        return
+    _env_mtimes = current
+    try:
+        fresh = Settings(_env_file=tuple(str(f) for f in files))  # type: ignore[call-arg]
+    except Exception:  # noqa: BLE001 - a half-saved .env must not break LLM calls; keep the previous values
+        logger.warning("Could not re-read .env; keeping the previous LLM settings")
+        return
+    settings = get_settings()
+    changed = [name for name in _LLM_ENV_FIELDS if getattr(settings, name) != getattr(fresh, name)]
+    for name in changed:
+        setattr(settings, name, getattr(fresh, name))
+    if changed:
+        log_event(logger, "llm.env_reloaded", fields=changed)  # names only, never values
 
 
 _override: LLMConfig | None = None
@@ -133,13 +179,15 @@ def invalidate_override_cache() -> None:
 
 
 async def current_config() -> LLMConfig:
+    """A URL saved in Settings wins; otherwise the environment / .env values are used."""
+    _refresh_env_llm()
     settings = get_settings()
     override = await _load_override()
     if override and override.base_url:
         return LLMConfig(base_url=normalize_base_url(override.base_url), model=override.model or settings.llm_model,
-                         api_key=override.api_key or settings.llm_api_key)
+                         api_key=override.api_key or settings.llm_api_key, source="settings")
     return LLMConfig(base_url=normalize_base_url(settings.llm_base_url), model=settings.llm_model,
-                     api_key=settings.llm_api_key)
+                     api_key=settings.llm_api_key, source="env")
 
 
 class LLMClient:
@@ -219,8 +267,8 @@ class LLMClient:
     async def health(self) -> dict:
         cfg = await current_config()
         if not cfg.enabled:
-            return {"configured": False, "reachable": False, "model": cfg.model, "base_url": None}
-        info: dict[str, Any] = {"configured": True, "base_url": cfg.base_url, "model": cfg.model}
+            return {"configured": False, "reachable": False, "model": cfg.model, "base_url": None, "source": cfg.source}
+        info: dict[str, Any] = {"configured": True, "base_url": cfg.base_url, "model": cfg.model, "source": cfg.source}
         try:
             async with httpx.AsyncClient(timeout=15, transport=self._transport) as client:
                 resp = await client.get(f"{cfg.base_url}/models", headers=self._headers(cfg))

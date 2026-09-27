@@ -554,7 +554,7 @@ export const Source = z.object({
 });
 export const SourceList = z.object({ sources: z.array(Source) });
 export const LlmHealth = z
-  .object({ configured: z.boolean(), reachable: z.boolean().optional(), model: str, base_url: str })
+  .object({ configured: z.boolean(), reachable: z.boolean().optional(), model: str, base_url: str, source: z.enum(["env", "settings"]).optional() })
   .passthrough();
 export const LlmTest = z.object({ ok: z.boolean(), parsed: z.unknown(), latency_ms: z.number(), model: z.string() });
 export const AgentRuns = z.object({

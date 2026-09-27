@@ -46,6 +46,13 @@ FIXTURES = Path(__file__).parent / "fixtures"
 set_embedder(HashEmbedder())
 
 
+@pytest.fixture(autouse=True)
+def _ignore_developer_env_files(monkeypatch):
+    """Tests never pick up a developer's real .env (e.g. a Colab LLM URL) through the LLM hot reload."""
+    monkeypatch.setattr(llm_module, "_env_files", lambda: [])
+    monkeypatch.setattr(llm_module, "_env_mtimes", None)
+
+
 @pytest.fixture
 def sample_resume_text() -> str:
     return (FIXTURES / "sample_resume.txt").read_text(encoding="utf-8")
