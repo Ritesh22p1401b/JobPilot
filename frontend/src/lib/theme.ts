@@ -1,8 +1,14 @@
-export type Theme = "dark" | "light";
+/** "comfort" is a warm, dim, low-blue-light theme for night / low-light use. */
+export type Theme = "dark" | "light" | "comfort";
+
+export const THEMES: readonly Theme[] = ["light", "dark", "comfort"];
+
+const isTheme = (v: unknown): v is Theme => typeof v === "string" && (THEMES as readonly string[]).includes(v);
 
 export function currentTheme(): Theme {
   if (typeof document === "undefined") return "dark";
-  return document.documentElement.dataset.theme === "light" ? "light" : "dark";
+  const t = document.documentElement.dataset.theme;
+  return isTheme(t) ? t : "dark";
 }
 
 export function setTheme(t: Theme): void {
@@ -15,6 +21,7 @@ export function setTheme(t: Theme): void {
   window.dispatchEvent(new Event("jobpilot:theme"));
 }
 
+/** Cycles Light → Dark → Eye comfort → Light. */
 export function toggleTheme(): void {
-  setTheme(currentTheme() === "dark" ? "light" : "dark");
+  setTheme(THEMES[(THEMES.indexOf(currentTheme()) + 1) % THEMES.length]!);
 }

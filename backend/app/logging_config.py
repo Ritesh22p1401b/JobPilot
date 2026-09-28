@@ -14,12 +14,13 @@ run_id_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("run_id"
 
 # Keys that must never be written to logs.
 _REDACT_KEYS = {"password", "api_key", "app_key", "token", "authorization", "jwt", "secret", "raw_text"}
+_TOKEN_COUNT_KEYS = {"prompt_tokens", "completion_tokens", "total_tokens"}  # LLM usage counts, not credentials
 
 
 def redact(value: Any) -> Any:
     if isinstance(value, dict):
         return {
-            k: ("[REDACTED]" if any(s in k.lower() for s in _REDACT_KEYS) else redact(v)) for k, v in value.items()
+            k: ("[REDACTED]" if k.lower() not in _TOKEN_COUNT_KEYS and any(s in k.lower() for s in _REDACT_KEYS) else redact(v)) for k, v in value.items()
         }
     if isinstance(value, list):
         return [redact(v) for v in value]

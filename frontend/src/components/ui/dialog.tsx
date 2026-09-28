@@ -61,7 +61,7 @@ export function Dialog({
   if (!open || typeof document === "undefined") return null;
   return createPortal(
     <div className="fixed inset-0 z-[70] flex items-end justify-center p-0 sm:items-center sm:p-4">
-      <div className="absolute inset-0 animate-fade-in bg-black/60 backdrop-blur-[2px]" onClick={onClose} aria-hidden />
+      <div className="absolute inset-0 animate-fade-in bg-overlay backdrop-blur-[2px]" onClick={onClose} aria-hidden />
       <div
         ref={panel}
         role="dialog"

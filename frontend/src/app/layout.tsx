@@ -15,12 +15,12 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   themeColor: [
     { media: "(prefers-color-scheme: dark)", color: "#0b0d10" },
-    { media: "(prefers-color-scheme: light)", color: "#f6f7f9" },
+    { media: "(prefers-color-scheme: light)", color: "#fafbfc" },
   ],
 };
 
-// Applies the saved theme before first paint (dark by default) so there is no flash.
-const themeScript = `try{var t=localStorage.getItem("jobpilot.theme");document.documentElement.dataset.theme=t==="light"?"light":"dark"}catch(e){document.documentElement.dataset.theme="dark"}`;
+// Applies the saved theme (light | dark | comfort) before first paint, dark by default, so there is no flash.
+const themeScript = `try{var t=localStorage.getItem("jobpilot.theme");document.documentElement.dataset.theme=t==="light"||t==="comfort"?t:"dark"}catch(e){document.documentElement.dataset.theme="dark"}`;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

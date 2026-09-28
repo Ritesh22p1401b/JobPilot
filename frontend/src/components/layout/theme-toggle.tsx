@@ -1,9 +1,9 @@
 "use client";
 
-import { Moon, Sun } from "lucide-react";
+import { Eye, Moon, Sun } from "lucide-react";
 import * as React from "react";
 
-import { currentTheme, setTheme, type Theme } from "@/lib/theme";
+import { THEMES, currentTheme, setTheme, type Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 /** Current theme, kept in sync with every toggle on the page (they all dispatch `jobpilot:theme`). */
@@ -18,32 +18,35 @@ export function useThemeState(): Theme {
   return t;
 }
 
-const OPTIONS: { value: Theme; label: string; icon: typeof Moon }[] = [
-  { value: "dark", label: "Dark", icon: Moon },
-  { value: "light", label: "Light", icon: Sun },
-];
+export const THEME_OPTIONS: Record<Theme, { label: string; hint: string; icon: typeof Moon; tone: string }> = {
+  light: { label: "Light", hint: "Light theme", icon: Sun, tone: "text-warning" },
+  dark: { label: "Dark", hint: "Dark theme", icon: Moon, tone: "text-primary" },
+  comfort: { label: "Eye comfort", hint: "Eye comfort: warm, dim and low in blue light for night use", icon: Eye, tone: "text-primary" },
+};
 
-/** Two-state Dark / Light switch. `compact` shows icons only (labels stay available to screen readers). */
+/** Light / Dark / Eye comfort switch. `compact` shows icons only (labels stay available to screen readers). */
 export function ThemeToggle({ compact = false, className }: { compact?: boolean; className?: string }) {
   const theme = useThemeState();
   const refs = React.useRef<(HTMLButtonElement | null)[]>([]);
 
   const onKey = (e: React.KeyboardEvent) => {
-    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+    const step = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[e.key];
+    if (!step) return;
     e.preventDefault();
-    const next: Theme = theme === "dark" ? "light" : "dark";
-    setTheme(next);
-    refs.current[OPTIONS.findIndex((o) => o.value === next)]?.focus();
+    const i = (THEMES.indexOf(theme) + step + THEMES.length) % THEMES.length;
+    setTheme(THEMES[i]!);
+    refs.current[i]?.focus();
   };
 
   return (
-    <div role="radiogroup" aria-label="Color theme" onKeyDown={onKey} className={cn("inline-flex shrink-0 items-center rounded-lg border border-border bg-surface p-0.5", className)}>
-      {OPTIONS.map((o, i) => {
-        const active = theme === o.value;
+    <div role="radiogroup" aria-label="Color theme" onKeyDown={onKey} className={cn("inline-flex shrink-0 items-center rounded-lg border border-border bg-background p-0.5", className)}>
+      {THEMES.map((value, i) => {
+        const o = THEME_OPTIONS[value];
+        const active = theme === value;
         const Icon = o.icon;
         return (
           <button
-            key={o.value}
+            key={value}
             ref={(el) => {
               refs.current[i] = el;
             }}
@@ -51,15 +54,15 @@ export function ThemeToggle({ compact = false, className }: { compact?: boolean;
             role="radio"
             aria-checked={active}
             tabIndex={active ? 0 : -1}
-            title={`${o.label} theme`}
-            onClick={() => setTheme(o.value)}
+            title={o.hint}
+            onClick={() => setTheme(value)}
             className={cn(
               "relative inline-flex items-center gap-1.5 rounded-md text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:outline-none",
               compact ? "h-7 w-7 justify-center" : "h-7 px-2.5",
-              active ? "bg-elevated text-foreground shadow-sm" : "text-muted hover:text-foreground",
+              active ? "bg-surface text-foreground shadow-sm" : "text-muted hover:text-foreground",
             )}
           >
-            <Icon className={cn("h-3.5 w-3.5", active && (o.value === "dark" ? "text-primary" : "text-warning"))} aria-hidden />
+            <Icon className={cn("h-3.5 w-3.5", active && o.tone)} aria-hidden />
             <span className={compact ? "sr-only" : undefined}>{o.label}</span>
           </button>
         );

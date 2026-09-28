@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Moon, Sun } from "lucide-react";
+import { Download, Eye, Moon, Sun } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { z } from "zod";
@@ -39,6 +39,7 @@ function Appearance() {
           options={[
             { id: "dark", label: "Dark", icon: <Moon className="h-4 w-4" /> },
             { id: "light", label: "Light", icon: <Sun className="h-4 w-4" /> },
+            { id: "comfort", label: "Eye comfort", icon: <Eye className="h-4 w-4" /> },
           ]}
         />
       </CardBody>

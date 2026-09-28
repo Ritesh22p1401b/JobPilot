@@ -131,7 +131,7 @@ function Palette({ onClose }: { onClose: () => void }) {
     {
       id: "c-theme",
       group: "Commands",
-      label: "Toggle light / dark theme",
+      label: "Switch theme (light / dark / eye comfort)",
       icon: <Moon className="h-4 w-4" />,
       run: () => {
         toggleTheme();
@@ -207,7 +207,7 @@ function Palette({ onClose }: { onClose: () => void }) {
 
   return createPortal(
     <div className="fixed inset-0 z-[75] flex items-start justify-center px-3 pt-[12vh]" role="presentation">
-      <div className="absolute inset-0 animate-fade-in bg-black/60 backdrop-blur-[2px]" onClick={onClose} aria-hidden />
+      <div className="absolute inset-0 animate-fade-in bg-overlay backdrop-blur-[2px]" onClick={onClose} aria-hidden />
       <div role="dialog" aria-modal="true" aria-label="Search JobPilot" className="relative w-full max-w-xl animate-rise overflow-hidden rounded-2xl border border-border bg-elevated shadow-float">
         <div className="flex items-center gap-3 border-b border-border px-4">
           <Search className="h-4 w-4 text-muted" aria-hidden />

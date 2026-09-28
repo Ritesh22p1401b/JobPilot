@@ -52,6 +52,7 @@ class TailorResult(BaseModel):
     llm_used: bool = False
     llm_error: str | None = None
     prompt_versions: list[str] = Field(default_factory=list)
+    llm_model: str | None = None
     rewrites_attempted: int = 0
     rewrites_accepted: int = 0
     rejected_rewrites: list[RejectedRewrite] = Field(default_factory=list)
@@ -150,6 +151,7 @@ async def tailor(master: CandidateProfileData, master_content: ResumeContent, an
                 parsed, meta = await llm.structured(RESUME_BULLET_REWRITER, _Rewrites, title=analysis.role_title,
                                                     terms=terms, bullets=listing)
                 result.prompt_versions.append(meta["prompt_version"])
+                result.llm_model = meta.get("model")
                 for rw in parsed.rewrites:
                     if not 0 <= rw.index < len(candidates):
                         continue
@@ -184,6 +186,7 @@ async def tailor(master: CandidateProfileData, master_content: ResumeContent, an
             parsed_s, meta = await llm.structured(RESUME_SUMMARY_WRITER, _Summary, title=analysis.role_title,
                                                   facts_json=json.dumps(facts))
             result.prompt_versions.append(meta["prompt_version"])
+            result.llm_model = meta.get("model")
             ok, reasons = verify_generated_text(parsed_s.summary, master, profile_source_text(master))
             if ok and parsed_s.summary.strip():
                 content.summary = parsed_s.summary.strip()

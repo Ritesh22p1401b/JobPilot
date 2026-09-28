@@ -78,7 +78,7 @@ async def create_tailored_version(db: AsyncSession, candidate: CandidateProfile,
                            source_id=c.source_id, original_text=c.original, verified=c.verified, confidence=c.confidence,
                            reasons_json=c.reasons))
     if ctx is not None:
-        ctx.llm_meta.extend({"prompt_version": p, "model": None} for p in result.prompt_versions)
+        ctx.llm_meta.extend({"prompt_version": p, "model": result.llm_model} for p in result.prompt_versions)
     return version
 
 

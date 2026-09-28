@@ -37,7 +37,7 @@ async function call<T extends z.ZodTypeAny>(schema: T, method: string, path: str
   return parsed.data;
 }
 
-async function waitForTasks(label: string, timeoutS = 600) {
+async function waitForTasks(label: string, timeoutS = Number(process.env.CONTRACT_TASK_TIMEOUT_S ?? 600)) {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutS * 1000) {
     const { tasks } = await call(S.TaskList, "GET", "/tasks?active_only=true");

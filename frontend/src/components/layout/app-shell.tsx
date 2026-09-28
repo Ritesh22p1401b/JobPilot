@@ -1,7 +1,7 @@
 "use client";
 
 import { useQueryClient } from "@tanstack/react-query";
-import { Bell, ChevronsLeft, ChevronsRight, CircleHelp, LogOut, Menu, Moon, Search, Settings, Sun, User, X } from "lucide-react";
+import { Bell, ChevronDown, ChevronsLeft, ChevronsRight, CircleHelp, FileText, Gauge, LogOut, Mail, Menu, Plus, Search, Settings, User, Wand2, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import * as React from "react";
@@ -15,19 +15,45 @@ import { toggleTheme } from "@/lib/theme";
 import { cn, fmtRelative, humanize } from "@/lib/utils";
 
 import { CommandPaletteProvider, usePalette } from "./command-palette";
-import { ThemeToggle, useThemeState } from "./theme-toggle";
+import { THEME_OPTIONS, ThemeToggle, useThemeState } from "./theme-toggle";
 import { DEFAULT_NOTIFICATION_GROUP, MOBILE_NAV, NAV, NOTIFICATION_GROUPS, isActive } from "./nav";
 
 // ------------------------------------------------------------------ focus mode (spec §45)
 const FocusCtx = React.createContext<{ focus: boolean; setFocus: (v: boolean) => void }>({ focus: false, setFocus: () => undefined });
 export const useFocusMode = () => React.useContext(FocusCtx);
 
+// ------------------------------------------------------------------ popovers
+/** Open state for a header popover that closes on an outside click or Escape. */
+function usePopover() {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  return { open, setOpen, ref };
+}
+
+const MENU_ITEM = "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-subtle hover:bg-hover hover:text-foreground";
+
 // ------------------------------------------------------------------ sidebar
 function Logo({ collapsed }: { collapsed?: boolean }) {
   return (
-    <Link href="/dashboard" className="flex items-center gap-2.5 px-2" aria-label="JobPilot home">
-      <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-primary text-sm font-bold text-primary-foreground shadow-[0_0_24px_-4px_var(--primary)]">J</span>
-      {!collapsed && <span className="text-[15px] font-semibold tracking-tight">JobPilot</span>}
+    <Link href="/dashboard" className="flex items-center px-2" aria-label="JobPilot home">
+      {collapsed ? (
+        <span className="grid h-8 w-8 place-items-center rounded-lg bg-primary text-sm font-bold text-primary-foreground">J</span>
+      ) : (
+        <span className="text-[21px] font-bold tracking-tight text-primary">
+          JobPilot<span className="text-accent">_</span>
+        </span>
+      )}
     </Link>
   );
 }
@@ -62,12 +88,12 @@ function AIStatus({ collapsed }: { collapsed?: boolean }) {
 function SidebarNav({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate?: () => void }) {
   const pathname = usePathname();
   return (
-    <nav aria-label="Main" className="scrollbar-thin flex-1 space-y-3 overflow-y-auto px-2 py-2">
+    <nav aria-label="Main" className="scrollbar-thin flex-1 space-y-4 overflow-y-auto px-3 py-4">
       {NAV.map((group) => (
         <div key={group.label ?? "top"}>
-          {group.label && !collapsed && <div className="px-2.5 pb-1 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">{group.label}</div>}
-          {group.label && collapsed && <div className="mx-3 mb-2 border-t border-border" aria-hidden />}
-          <ul className="space-y-0.5">
+          {group.label && !collapsed && <div className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">{group.label}</div>}
+          {group.label && collapsed && <div className="mx-2 mb-3 border-t border-border" aria-hidden />}
+          <ul className={cn("space-y-1", collapsed && "flex flex-col items-center")}>
             {group.items.map((item) => {
               const active = isActive(pathname, item);
               return (
@@ -78,12 +104,12 @@ function SidebarNav({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate
                     title={collapsed ? item.label : undefined}
                     aria-current={active ? "page" : undefined}
                     className={cn(
-                      "group flex items-center gap-2.5 rounded-lg px-2.5 py-[5px] text-[13px] font-medium transition-colors",
-                      collapsed && "justify-center",
-                      active ? "bg-hover text-foreground" : "text-subtle hover:bg-hover/60 hover:text-foreground",
+                      "group flex items-center gap-3 rounded-lg text-[13px] font-medium transition-colors",
+                      collapsed ? "h-10 w-10 justify-center" : "px-3 py-2",
+                      active ? "bg-primary/10 text-primary" : "text-subtle hover:bg-hover hover:text-foreground",
                     )}
                   >
-                    <item.icon className={cn("h-4 w-4 shrink-0", active ? "text-primary" : "text-muted group-hover:text-subtle")} aria-hidden />
+                    <item.icon className={cn("shrink-0", collapsed ? "h-[18px] w-[18px]" : "h-4 w-4", active ? "text-primary" : "text-muted group-hover:text-subtle")} aria-hidden />
                     {!collapsed && <span className="truncate">{item.label}</span>}
                     {collapsed && <span className="sr-only">{item.label}</span>}
                   </Link>
@@ -101,20 +127,8 @@ function SidebarNav({ collapsed, onNavigate }: { collapsed?: boolean; onNavigate
 function Notifications() {
   const { data } = useNotifications();
   const qc = useQueryClient();
-  const [open, setOpen] = React.useState(false);
-  const ref = React.useRef<HTMLDivElement>(null);
+  const { open, setOpen, ref } = usePopover();
   const unread = data?.unread ?? 0;
-  React.useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
   const groups = new Map<string, NonNullable<typeof data>["notifications"]>();
   for (const n of data?.notifications ?? []) {
     const g = (NOTIFICATION_GROUPS[n.kind] ?? DEFAULT_NOTIFICATION_GROUP).label;
@@ -127,8 +141,12 @@ function Notifications() {
   return (
     <div className="relative" ref={ref}>
       <Button variant="ghost" size="icon" aria-label={`Notifications, ${unread} unread`} aria-expanded={open} onClick={() => setOpen(!open)}>
-        <Bell className="h-4 w-4" />
-        {unread > 0 && <span className="absolute top-1 right-1 grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">{unread > 9 ? "9+" : unread}</span>}
+        <Bell className="h-[18px] w-[18px]" />
+        {unread > 0 && (
+          <span className="absolute -top-0.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground ring-2 ring-surface">
+            {unread > 9 ? "9+" : unread}
+          </span>
+        )}
       </Button>
       {open && (
         <div className="absolute right-0 z-40 mt-2 w-[360px] max-w-[calc(100vw-1.5rem)] animate-rise overflow-hidden rounded-xl border border-border bg-elevated shadow-float">
@@ -174,48 +192,69 @@ function UserMenu() {
   const qc = useQueryClient();
   const router = useRouter();
   const theme = useThemeState();
-  const [open, setOpen] = React.useState(false);
-  const ref = React.useRef<HTMLDivElement>(null);
-  React.useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  const { open, setOpen, ref } = usePopover();
   const email = me.data?.email ?? "";
   const initials = email ? email[0]!.toUpperCase() : "·";
+  const handle = email.split("@")[0] ?? "";
+  const ThemeIcon = THEME_OPTIONS[theme].icon;
   const signOut = () => {
     setToken(null);
     qc.clear();
     router.replace("/login");
   };
-  const item = "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm text-subtle hover:bg-hover hover:text-foreground";
   return (
     <div className="relative" ref={ref}>
-      <button onClick={() => setOpen(!open)} aria-expanded={open} aria-label="Account menu" className="grid h-8 w-8 place-items-center rounded-full bg-gradient-to-br from-primary to-accent text-[13px] font-semibold text-white">
-        {initials}
+      <button onClick={() => setOpen(!open)} aria-expanded={open} aria-label="Account menu" className="flex items-center gap-2 rounded-full py-1 pr-1 pl-1 transition-colors hover:bg-hover lg:pr-2">
+        <span className="grid h-8 w-8 place-items-center rounded-full bg-gradient-to-br from-primary to-accent text-[13px] font-semibold text-white">{initials}</span>
+        <span className="hidden max-w-[140px] truncate text-[13px] font-medium lg:block">{handle}</span>
+        <ChevronDown className="hidden h-4 w-4 text-muted lg:block" aria-hidden />
       </button>
       {open && (
         <div className="absolute right-0 z-40 mt-2 w-60 animate-rise rounded-xl border border-border bg-elevated p-1.5 shadow-float">
           <div className="truncate px-3 py-2 text-xs text-muted">{email}</div>
-          <Link href="/profile" className={item} onClick={() => setOpen(false)}>
+          <Link href="/profile" className={MENU_ITEM} onClick={() => setOpen(false)}>
             <User className="h-4 w-4" /> Profile
           </Link>
-          <Link href="/settings" className={item} onClick={() => setOpen(false)}>
+          <Link href="/settings" className={MENU_ITEM} onClick={() => setOpen(false)}>
             <Settings className="h-4 w-4" /> Settings
           </Link>
-          <button className={item} onClick={toggleTheme}>
-            {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />} {theme === "dark" ? "Light theme" : "Dark theme"}
+          <button className={MENU_ITEM} onClick={toggleTheme}>
+            <ThemeIcon className="h-4 w-4" /> Theme: {THEME_OPTIONS[theme].label}
           </button>
           <div className="my-1 border-t border-border" />
-          <button className={item} onClick={signOut}>
+          <button className={MENU_ITEM} onClick={signOut}>
             <LogOut className="h-4 w-4" /> Sign out
           </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** "+ New" shortcuts: links to existing pages only. */
+const NEW_ITEMS = [
+  { href: "/jobs", label: "Find jobs", icon: Search },
+  { href: "/resume-lab/new", label: "Tailored resume", icon: Wand2 },
+  { href: "/ats", label: "ATS scan", icon: Gauge },
+  { href: "/cover-letters", label: "Cover letter", icon: Mail },
+  { href: "/resume", label: "Base resume", icon: FileText },
+] as const;
+
+function NewMenu() {
+  const { open, setOpen, ref } = usePopover();
+  return (
+    <div className="relative" ref={ref}>
+      <Button size="sm" aria-expanded={open} aria-haspopup="menu" aria-label="New" onClick={() => setOpen(!open)} className="h-9 px-3 sm:px-4">
+        <Plus className="h-4 w-4" aria-hidden />
+        <span className="hidden sm:inline">New</span>
+      </Button>
+      {open && (
+        <div role="menu" className="absolute right-0 z-40 mt-2 w-56 animate-rise rounded-xl border border-border bg-elevated p-1.5 shadow-float">
+          {NEW_ITEMS.map(({ href, label, icon: Icon }) => (
+            <Link key={href} href={href} role="menuitem" className={MENU_ITEM} onClick={() => setOpen(false)}>
+              <Icon className="h-4 w-4" aria-hidden /> {label}
+            </Link>
+          ))}
         </div>
       )}
     </div>
@@ -267,33 +306,39 @@ function HelpDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   );
 }
 
-function Header({ onMenu }: { onMenu: () => void }) {
+/** Full-width top bar. On desktop the logo cell is exactly as wide as the sidebar below it. */
+function Header({ onMenu, collapsed }: { onMenu: () => void; collapsed: boolean }) {
   const palette = usePalette();
   const [help, setHelp] = React.useState(false);
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border bg-background/80 px-3 backdrop-blur-md md:px-6">
+    <header className="fixed inset-x-0 top-0 z-40 flex h-16 items-center gap-2 border-b border-border bg-surface px-3 md:pr-6 md:pl-0">
       <Button variant="ghost" size="icon" className="md:hidden" aria-label="Open navigation" onClick={onMenu}>
         <Menu className="h-4 w-4" />
       </Button>
+      <div className={cn("hidden h-full shrink-0 items-center transition-[width] duration-200 md:flex", collapsed ? "w-[72px] justify-center" : "w-[248px] px-4")}>
+        <Logo collapsed={collapsed} />
+      </div>
       <button
         onClick={palette.open}
-        className="flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-lg border border-border bg-surface px-3 text-left text-[13px] text-muted transition-colors hover:border-border-strong md:max-w-md"
+        className="flex h-10 min-w-0 flex-1 items-center gap-2.5 rounded-lg border border-border bg-background px-3.5 text-left text-[13px] text-muted transition-colors hover:border-border-strong md:ml-6 md:max-w-md"
         aria-label="Search JobPilot (Ctrl+K)"
       >
         <Search className="h-4 w-4 shrink-0" aria-hidden />
-        <span className="truncate">Search JobPilot…</span>
+        <span className="truncate">Search jobs, applications, resumes…</span>
         <span className="ml-auto hidden items-center gap-1 sm:flex">
           <Kbd>Ctrl</Kbd>
           <Kbd>K</Kbd>
         </span>
       </button>
-      <div className="flex flex-1 items-center justify-end gap-1.5">
-        <ThemeToggle compact />
+      <div className="flex flex-1 items-center justify-end gap-1.5 md:gap-2">
         <Activity />
+        <NewMenu />
+        <ThemeToggle compact className="hidden sm:inline-flex" />
         <Notifications />
         <Button variant="ghost" size="icon" aria-label="Help" onClick={() => setHelp(true)}>
-          <CircleHelp className="h-4 w-4" />
+          <CircleHelp className="h-[18px] w-[18px]" />
         </Button>
+        <span className="mx-1 hidden h-6 border-l border-border sm:block" aria-hidden />
         <UserMenu />
       </div>
       <HelpDialog open={help} onClose={() => setHelp(false)} />
@@ -359,41 +404,39 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[90] focus:rounded-lg focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground">
           Skip to content
         </a>
-        <div className={cn("min-h-screen", !focus && (isCollapsed ? "md:pl-[72px]" : "md:pl-[248px]"))}>
+        <div className={cn("min-h-screen bg-background", !focus && "pt-16", !focus && (isCollapsed ? "md:pl-[72px]" : "md:pl-[248px]"))}>
           {!focus && (
-            <aside className={cn("fixed inset-y-0 left-0 z-40 hidden flex-col border-r border-border bg-surface transition-[width] duration-200 md:flex", isCollapsed ? "w-[72px]" : "w-[248px]")}>
-              <div className={cn("flex h-14 items-center border-b border-border px-3", isCollapsed ? "justify-center" : "justify-between")}>
-                <Logo collapsed={isCollapsed} />
-                {!isCollapsed && (
-                  <Button variant="ghost" size="icon-sm" aria-label="Collapse sidebar" onClick={() => setCollapsed("1")}>
-                    <ChevronsLeft className="h-4 w-4" />
-                  </Button>
-                )}
-              </div>
+            <aside className={cn("fixed top-16 bottom-0 left-0 z-30 hidden flex-col border-r border-border bg-surface transition-[width] duration-200 md:flex", isCollapsed ? "w-[72px]" : "w-[248px]")}>
               <SidebarNav collapsed={isCollapsed} />
-              <div className="space-y-1 border-t border-border p-2">
-                {isCollapsed && (
-                  <Button variant="ghost" size="icon" className="w-full" aria-label="Expand sidebar" onClick={() => setCollapsed("0")}>
-                    <ChevronsRight className="h-4 w-4" />
-                  </Button>
-                )}
+              <div className="space-y-1 border-t border-border p-3">
                 <AIStatus collapsed={isCollapsed} />
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className={cn("w-full text-muted", isCollapsed ? "px-0" : "justify-start px-2.5")}
+                  aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                  onClick={() => setCollapsed(isCollapsed ? "0" : "1")}
+                >
+                  {isCollapsed ? <ChevronsRight className="h-4 w-4" /> : <ChevronsLeft className="h-4 w-4" />}
+                  {!isCollapsed && "Collapse"}
+                </Button>
               </div>
             </aside>
           )}
 
           {drawer && (
             <div className="fixed inset-0 z-50 md:hidden" role="dialog" aria-modal="true" aria-label="Navigation">
-              <div className="absolute inset-0 animate-fade-in bg-black/60" onClick={() => setDrawer(false)} aria-hidden />
+              <div className="absolute inset-0 animate-fade-in bg-overlay" onClick={() => setDrawer(false)} aria-hidden />
               <aside className="relative flex h-full w-[280px] animate-rise flex-col border-r border-border bg-surface">
-                <div className="flex h-14 items-center justify-between border-b border-border px-3">
+                <div className="flex h-16 items-center justify-between border-b border-border px-3">
                   <Logo />
                   <Button variant="ghost" size="icon" aria-label="Close navigation" onClick={() => setDrawer(false)}>
                     <X className="h-4 w-4" />
                   </Button>
                 </div>
                 <SidebarNav onNavigate={() => setDrawer(false)} />
-                <div className="border-t border-border p-2">
+                <div className="space-y-2 border-t border-border p-3">
+                  <ThemeToggle className="w-full justify-between" />
                   <AIStatus />
                 </div>
               </aside>
@@ -401,16 +444,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           )}
 
           {focus ? (
-            <div className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border bg-background/85 px-4 backdrop-blur-md md:px-8">
+            <div className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-surface px-4 md:px-8">
               <Logo />
               <Button variant="secondary" size="sm" onClick={() => setFocus(false)}>
                 Exit focus mode
               </Button>
             </div>
           ) : (
-            <Header onMenu={() => setDrawer(true)} />
+            <Header onMenu={() => setDrawer(true)} collapsed={isCollapsed} />
           )}
-          <main id="main" className="mx-auto w-full max-w-[1480px] px-4 pt-6 pb-28 md:px-8 md:pb-12">
+          <main id="main" className="mx-auto w-full max-w-[1480px] px-4 pt-7 pb-28 md:px-8 md:pb-12">
             {children}
           </main>
           {!focus && <MobileNav onMenu={() => setDrawer(true)} />}

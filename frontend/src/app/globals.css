@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* JobPilot design tokens. Dark-first; light theme via [data-theme="light"]. */
+/* JobPilot design tokens. Dark-first; [data-theme] = dark | light | comfort. */
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -10,6 +10,7 @@
   --hover: #1b212a;
   --border: #252b33;
   --border-strong: #333b46;
+  --track: #333b46; /* off-state switch track */
   --foreground: #f5f7fa;
   --subtle: #a5adb8;
   --muted: #6f7782;
@@ -18,33 +19,71 @@
   --primary-foreground: #ffffff;
   --accent: #22d3ee; /* cyan: secondary / informational */
   --success: #34d399;
+  --success-foreground: #000000;
+  --danger-foreground: #ffffff;
   --warning: #fbbf24;
   --danger: #f87171;
   --info: #60a5fa;
   --ring: color-mix(in oklab, var(--primary) 55%, transparent);
   --shadow: 0 12px 40px -12px rgb(0 0 0 / 0.6);
+  --overlay: rgb(0 0 0 / 0.6); /* modal backdrop */
 }
 
+/* Light: clean SaaS look (white panels on a cool light-grey canvas, electric-violet actions, sky-blue accents).
+   Every text token is >= 4.5:1 (WCAG AA) on background, surface, hover and its own 14% tint. */
 :root[data-theme="light"] {
   color-scheme: light;
-  --background: #f6f7f9;
-  --surface: #ffffff;
+  --background: #fafbfc; /* near-white canvas */
+  --surface: #ffffff; /* white panels and cards */
   --elevated: #ffffff;
-  --hover: #f0f2f5;
-  --border: #e3e6eb;
-  --border-strong: #cfd4dc;
-  --foreground: #0b0d10;
-  --subtle: #4b5563;
-  --muted: #6b7280;
-  --primary: #5b4bff;
-  --primary-strong: #4a39f0;
+  --hover: #f3f4f7;
+  --border: #e8eaee; /* hairline dividers */
+  --border-strong: #d3d6dc;
+  --track: #8d93a0; /* off-state switch track */
+  --foreground: #1f2430;
+  --subtle: #475063;
+  --muted: #5d6475;
+  --primary: #5b2ef0; /* electric violet */
+  --primary-strong: #4a1fd4;
   --primary-foreground: #ffffff;
-  --accent: #0891b2;
-  --success: #059669;
-  --warning: #b45309;
-  --danger: #dc2626;
-  --info: #2563eb;
-  --shadow: 0 12px 32px -12px rgb(15 23 42 / 0.18);
+  --accent: #06639a; /* sky blue */
+  --success: #116632;
+  --success-foreground: #ffffff;
+  --danger-foreground: #ffffff;
+  --warning: #8f4508;
+  --danger: #b01e25;
+  --info: #075fa6;
+  --shadow: 0 1px 2px rgb(16 24 40 / 0.05), 0 8px 24px -12px rgb(16 24 40 / 0.14);
+  --overlay: rgb(17 24 39 / 0.4);
+}
+
+/* Eye comfort: warm, dim and low in blue light for night / low-light use (like a screen "night light").
+   Warm charcoal surfaces, cream text at softer contrast than Dark (~12:1 instead of ~18:1) and an amber accent.
+   Every text token is still >= 4.5:1 (WCAG AA) on every surface and on its own 14% tint. */
+:root[data-theme="comfort"] {
+  color-scheme: dark;
+  --background: #1a1612;
+  --surface: #221d18;
+  --elevated: #29231d;
+  --hover: #302921;
+  --border: #3a3128;
+  --border-strong: #4a3f34;
+  --track: #76675a; /* off-state switch track */
+  --foreground: #e6d9c3; /* warm cream, never pure white */
+  --subtle: #c9b9a0;
+  --muted: #a8987f;
+  --primary: #e0a15a; /* amber */
+  --primary-strong: #cf8f48;
+  --primary-foreground: #1a1612;
+  --accent: #c9a36a;
+  --success: #a7c080;
+  --success-foreground: #1a1612;
+  --danger-foreground: #1a1612;
+  --warning: #e3b75a;
+  --danger: #e98c73;
+  --info: #9fb4c7;
+  --shadow: 0 12px 40px -12px rgb(0 0 0 / 0.55);
+  --overlay: rgb(10 8 6 / 0.6);
 }
 
 @theme inline {
@@ -54,6 +93,7 @@
   --color-hover: var(--hover);
   --color-border: var(--border);
   --color-border-strong: var(--border-strong);
+  --color-track: var(--track);
   --color-foreground: var(--foreground);
   --color-subtle: var(--subtle);
   --color-muted: var(--muted);
@@ -62,10 +102,13 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-accent: var(--accent);
   --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-danger-foreground: var(--danger-foreground);
   --color-warning: var(--warning);
   --color-danger: var(--danger);
   --color-info: var(--info);
   --color-ring: var(--ring);
+  --color-overlay: var(--overlay);
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, "Segoe UI", sans-serif;
   --font-mono: var(--font-jetbrains), ui-monospace, "Cascadia Code", monospace;
   --shadow-float: var(--shadow);
@@ -132,8 +175,15 @@ body {
   animation: var(--animate-shimmer);
 }
 .scrollbar-thin {
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: none;
+}
+
+/* Hide scrollbars everywhere; content still scrolls with wheel, touch and keyboard. */
+* {
+  scrollbar-width: none;
+}
+*::-webkit-scrollbar {
+  display: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

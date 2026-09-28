@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 
 import httpx
 import pytest
@@ -81,6 +83,38 @@ async def test_llm_unconfigured(monkeypatch):
     assert not await client.is_enabled()
     with pytest.raises(llm_mod.LLMUnavailable):
         await client.chat([{"role": "user", "content": "x"}])
+
+
+async def test_llm_env_file_edits_apply_without_restart(monkeypatch, tmp_path):
+    """Colab URLs change every session: editing backend/.env must take effect without restarting the API."""
+    monkeypatch.setattr(llm_mod, "_load_override", _no_override)
+    for var in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
+        monkeypatch.delenv(var, raising=False)  # real env vars would win over the file
+    settings = get_settings()
+    for field in ("llm_base_url", "llm_api_key", "llm_model"):
+        monkeypatch.setattr(settings, field, getattr(settings, field))  # restored after the test
+    env = tmp_path / ".env"
+    env.write_text("LLM_BASE_URL=" + chr(10), encoding="utf-8")
+    monkeypatch.setattr(llm_mod, "_env_files", lambda: [env])
+
+    assert not (await llm_mod.current_config()).enabled  # baseline read
+
+    env.write_text(chr(10).join(["LLM_BASE_URL=https://abc.trycloudflare.com", "LLM_API_KEY=k1", "LLM_MODEL=qwen3:8b", ""]), encoding="utf-8")
+    os.utime(env, (time.time() + 5, time.time() + 5))  # guarantee a new mtime on coarse filesystems
+    cfg = await llm_mod.current_config()
+    assert (cfg.base_url, cfg.api_key, cfg.model, cfg.source) == ("https://abc.trycloudflare.com/v1", "k1", "qwen3:8b", "env")
+
+
+async def test_llm_settings_override_wins_and_reports_source(monkeypatch):
+    async def _override():
+        return llm_mod.LLMConfig(base_url="https://saved.example.com", model="", api_key="")
+
+    monkeypatch.setattr(llm_mod, "_load_override", _override)
+    monkeypatch.setattr(get_settings(), "llm_base_url", "https://from-env.example.com")
+    cfg = await llm_mod.current_config()
+    assert cfg.base_url == "https://saved.example.com/v1" and cfg.source == "settings"
+    health = await llm_mod.LLMClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"data": []}))).health()
+    assert health["source"] == "settings" and health["reachable"]
 
 
 async def _no_override():
@@ -209,3 +243,11 @@ async def test_lever_submission():
     assert res.ok and res.reference == "app-1"
     assert route.calls[0].request.url.params["key"] == "k"
     assert not LeverApplicationProvider(keys={}).is_authorized("meesho:abc")
+
+
+def test_log_redaction_keeps_llm_token_counts_but_hides_credentials():
+    from app.logging_config import redact
+
+    out = redact({"prompt_tokens": 12, "completion_tokens": 3, "access_token": "abc", "api_key": "k", "nested": {"jwt": "x"}})
+    assert out["prompt_tokens"] == 12 and out["completion_tokens"] == 3
+    assert out["access_token"] == out["api_key"] == out["nested"]["jwt"] == "[REDACTED]"

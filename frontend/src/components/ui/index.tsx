@@ -18,8 +18,8 @@ export const buttonVariants = cva(
         primary: "bg-primary text-primary-foreground shadow-[0_0_0_1px_var(--primary-strong)_inset] hover:bg-primary-strong",
         secondary: "border border-border bg-elevated text-foreground hover:border-border-strong hover:bg-hover",
         ghost: "text-subtle hover:bg-hover hover:text-foreground",
-        danger: "bg-danger text-white hover:opacity-90",
-        success: "bg-success text-black hover:opacity-90",
+        danger: "bg-danger text-danger-foreground hover:opacity-90",
+        success: "bg-success text-success-foreground hover:opacity-90",
         ai: "border ai-border ai-gradient text-foreground hover:border-primary",
         link: "h-auto px-0 text-primary hover:underline",
       },
@@ -246,7 +246,7 @@ export function Toggle({
         aria-checked={checked}
         disabled={disabled}
         onClick={() => onChange(!checked)}
-        className={cn("relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors", checked ? "bg-primary" : "bg-border-strong")}
+        className={cn("relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors", checked ? "bg-primary" : "bg-track")}
       >
         <span className={cn("absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-[left]", checked ? "left-[18px]" : "left-0.5")} />
       </button>
