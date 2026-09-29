@@ -1,0 +1,84 @@
+# Production overrides (Linux cloud VM):
+#   docker compose -f compose.yaml -f compose.prod.yaml up -d --build
+#
+# - nginx is the only service with public ports (80/443); postgres, qdrant, backend and frontend stay internal.
+# - No source bind mounts: everything runs from the built images.
+# - NGINX_MODE=http until a certificate exists, then NGINX_MODE=https (see docs/deployment.md).
+
+x-restart: &restart
+  restart: unless-stopped
+
+# Docker's json-file logs, rotated so they can't fill the disk. Apps log to stdout/stderr.
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+x-prod-env: &prod-env
+  APP_ENV: production
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+  CORS_ORIGINS: ${PUBLIC_URL:?Set PUBLIC_URL in .env, e.g. https://jobpilot.example.com}
+
+services:
+  postgres:
+    <<: [*restart, *logging]
+
+  qdrant:
+    <<: [*restart, *logging]
+
+  migrate:
+    <<: *logging
+    environment:
+      <<: *prod-env
+
+  backend:
+    <<: [*restart, *logging]
+    environment:
+      <<: *prod-env
+
+  worker:
+    <<: [*restart, *logging]
+    environment:
+      <<: *prod-env
+
+  frontend:
+    <<: [*restart, *logging]
+
+  nginx:
+    <<: [*restart, *logging]
+    image: nginx:1.28-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in .env, e.g. jobpilot.example.com}
+    volumes:
+      - ./nginx/templates/${NGINX_MODE:-http}:/etc/nginx/templates:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+      - certbot_www:/var/www/certbot:ro
+      - certbot_conf:/etc/letsencrypt:ro
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/nginx-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Let's Encrypt client. Not started by `up`; run on demand (issue once, renew from cron). See docs/deployment.md.
+  certbot:
+    image: certbot/certbot:latest
+    profiles: ["certbot"]
+    volumes:
+      - certbot_www:/var/www/certbot
+      - certbot_conf:/etc/letsencrypt
+
+volumes:
+  certbot_www:
+  certbot_conf:

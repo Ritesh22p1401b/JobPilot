@@ -1,8 +1,11 @@
-"""OpenAI-compatible LLM client (Ollama / vLLM / LM Studio / llama.cpp server).
+"""OpenAI-compatible LLM client with two switchable providers.
 
-Designed for Qwen3-8B served from Google Colab behind a tunnel:
-* the base URL can be changed at runtime (Colab tunnels rotate each session): either in Settings, or by editing
-  LLM_BASE_URL / LLM_API_KEY / LLM_MODEL in backend/.env, which is re-read when the file changes (no restart);
+* "qwen": Qwen3-8B (Ollama / vLLM / LM Studio / llama.cpp) served from Google Colab behind a tunnel.
+* "gemini": Google Gemini through its OpenAI-compatible endpoint, so prompts, JSON validation and the rules
+  fallback are identical for both.
+
+The provider (LLM_PROVIDER) and the LLM_* / GEMINI_* values can change at runtime: either in Settings, or by
+editing backend/.env, which is re-read when the file changes (no restart). Colab tunnels rotate each session.
 * Qwen3 "thinking" is disabled with `/no_think` and any <think> block is stripped;
 * output is parsed as JSON and validated with Pydantic, with one repair round-trip.
 Raw LLM output is never trusted: callers get either a validated model or an exception.
@@ -97,18 +100,30 @@ def extract_json(text: str) -> Any:
     raise LLMOutputError("Unterminated JSON in LLM output")
 
 
+PROVIDERS = ("qwen", "gemini")
+
+
 class LLMConfig(BaseModel):
+    provider: str = "qwen"
     base_url: str = ""
     model: str = ""
     api_key: str = ""
+    reasoning_effort: str = ""  # Gemini only
     source: str = "env"  # "settings" (runtime override saved in the app) or "env" (environment / .env file)
 
     @property
     def enabled(self) -> bool:
-        return bool(self.base_url)
+        # Gemini can't be called without a key; a local Qwen server may not need one.
+        return bool(self.base_url) and (self.provider != "gemini" or bool(self.api_key))
 
 
-_LLM_ENV_FIELDS = ("llm_base_url", "llm_api_key", "llm_model")
+def normalize_provider(value: str | None) -> str:
+    value = (value or "").strip().lower()
+    return value if value in PROVIDERS else "qwen"
+
+
+_LLM_ENV_FIELDS = ("llm_base_url", "llm_api_key", "llm_model", "llm_provider", "gemini_api_key", "gemini_model",
+                   "gemini_base_url", "gemini_reasoning_effort")
 _env_mtimes: tuple[float, ...] | None = None
 
 
@@ -151,12 +166,12 @@ def _refresh_env_llm() -> None:
         log_event(logger, "llm.env_reloaded", fields=changed)  # names only, never values
 
 
-_override: LLMConfig | None = None
+_override: dict[str, Any] | None = None
 _override_loaded_at = 0.0
 
 
-async def _load_override() -> LLMConfig | None:
-    """Runtime override stored in system_settings (key 'llm'), cached for 15s."""
+async def _load_override() -> dict[str, Any] | None:
+    """Runtime override in system_settings (key 'llm'): a provider choice and/or a Qwen URL. Cached for 15s."""
     global _override, _override_loaded_at
     if time.monotonic() - _override_loaded_at < 15:
         return _override
@@ -166,7 +181,8 @@ async def _load_override() -> LLMConfig | None:
 
         async with get_sessionmaker()() as db:
             row = await db.get(SystemSetting, "llm")
-            _override = LLMConfig(**row.value_json) if row and row.value_json.get("base_url") else None
+            value = dict(row.value_json or {}) if row else {}
+            _override = value if value.get("base_url") or value.get("provider") else None
     except Exception:  # noqa: BLE001 - DB not ready; fall back to env
         _override = None
     _override_loaded_at = time.monotonic()
@@ -178,16 +194,61 @@ def invalidate_override_cache() -> None:
     _override_loaded_at = 0.0
 
 
+def gemini_config(settings: Settings, source: str = "env") -> LLMConfig:
+    return LLMConfig(provider="gemini", base_url=settings.gemini_base_url.strip().rstrip("/"),
+                     model=settings.gemini_model.strip(), api_key=settings.gemini_api_key.strip(),
+                     reasoning_effort=settings.gemini_reasoning_effort.strip(), source=source)
+
+
+def qwen_config(settings: Settings, override: dict[str, Any] | None = None, source: str = "env") -> LLMConfig:
+    if override and override.get("base_url"):
+        return LLMConfig(provider="qwen", base_url=normalize_base_url(override["base_url"]),
+                         model=override.get("model") or settings.llm_model,
+                         api_key=override.get("api_key") or settings.llm_api_key, source="settings")
+    return LLMConfig(provider="qwen", base_url=normalize_base_url(settings.llm_base_url), model=settings.llm_model,
+                     api_key=settings.llm_api_key, source=source)
+
+
 async def current_config() -> LLMConfig:
-    """A URL saved in Settings wins; otherwise the environment / .env values are used."""
+    """A provider chosen in Settings wins over LLM_PROVIDER; a Qwen URL saved in Settings wins over LLM_BASE_URL."""
     _refresh_env_llm()
     settings = get_settings()
     override = await _load_override()
-    if override and override.base_url:
-        return LLMConfig(base_url=normalize_base_url(override.base_url), model=override.model or settings.llm_model,
-                         api_key=override.api_key or settings.llm_api_key, source="settings")
-    return LLMConfig(base_url=normalize_base_url(settings.llm_base_url), model=settings.llm_model,
-                     api_key=settings.llm_api_key, source="env")
+    chosen = normalize_provider(override.get("provider")) if override and override.get("provider") else None
+    provider = chosen or normalize_provider(settings.llm_provider)
+    source = "settings" if chosen else "env"
+    if provider == "gemini":
+        return gemini_config(settings, source)
+    return qwen_config(settings, override, source)
+
+
+def provider_summary(settings: Settings, override: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """What each provider would use (never the keys), so the UI can offer the switch."""
+    qwen, gemini = qwen_config(settings, override), gemini_config(settings)
+    return {
+        "qwen": {"configured": qwen.enabled, "model": qwen.model},
+        "gemini": {"configured": gemini.enabled, "model": gemini.model},
+    }
+
+
+MAX_RETRY_DELAY_SECONDS = 60.0
+
+
+def retry_delay(resp: httpx.Response, attempt: int) -> float:
+    """How long to wait before retrying a 429/5xx: the server's own hint when it gives one, else backoff.
+
+    Rate limits are honoured, never worked around: a Retry-After header or Gemini's `"retryDelay": "32s"` wins over
+    the default 1s, 2s, 4s… backoff (capped so a background agent isn't stuck for long).
+    """
+    hint: float | None = None
+    header = resp.headers.get("retry-after", "").strip()
+    if header.replace(".", "", 1).isdigit():
+        hint = float(header)
+    else:
+        match = re.search(r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"', resp.text[:5000])
+        if match:
+            hint = float(match.group(1))
+    return min(hint if hint is not None else float(2 ** attempt), MAX_RETRY_DELAY_SECONDS)
 
 
 class LLMClient:
@@ -209,12 +270,16 @@ class LLMClient:
                    json_mode: bool = True) -> tuple[str, dict]:
         cfg = await current_config()
         if not cfg.enabled:
-            raise LLMUnavailable("LLM is not configured (set LLM_BASE_URL or configure it in Settings)")
+            hint = "set GEMINI_API_KEY" if cfg.provider == "gemini" else "set LLM_BASE_URL or configure it in Settings"
+            raise LLMUnavailable(f"LLM is not configured ({hint})")
         msgs = [dict(m) for m in messages]
-        if self.settings.llm_disable_thinking and msgs and msgs[-1]["role"] == "user":
+        if cfg.provider == "qwen" and self.settings.llm_disable_thinking and msgs and msgs[-1]["role"] == "user":
             msgs[-1]["content"] += "\n/no_think"
         body: dict[str, Any] = {"model": cfg.model, "messages": msgs, "temperature": temperature,
                                 "max_tokens": max_tokens, "stream": False}
+        if cfg.provider == "gemini" and cfg.reasoning_effort:
+            # Gemini's thinking tokens count against max_tokens; a low budget leaves room for the JSON answer.
+            body["reasoning_effort"] = cfg.reasoning_effort
         if json_mode and self.settings.llm_json_mode:
             body["response_format"] = {"type": "json_object"}
         last_exc: Exception | None = None
@@ -230,7 +295,8 @@ class LLMClient:
             latency = int((time.monotonic() - started) * 1000)
             if resp.status_code in (429, 500, 502, 503, 504):
                 last_exc = LLMUnavailable(f"LLM HTTP {resp.status_code}")
-                await asyncio.sleep(2 ** attempt)
+                if attempt < self.settings.llm_max_retries:
+                    await asyncio.sleep(retry_delay(resp, attempt))
                 continue
             if resp.status_code == 400 and "response_format" in body:
                 body.pop("response_format")  # server doesn't support JSON mode; rely on prompt + parser
@@ -243,9 +309,9 @@ class LLMClient:
             except (ValueError, KeyError, IndexError) as exc:
                 raise LLMOutputError(f"Unexpected LLM response shape: {resp.text[:200]}") from exc
             usage = data.get("usage") or {}
-            log_event(logger, "llm_call", model=cfg.model, latency_ms=latency,
+            log_event(logger, "llm_call", provider=cfg.provider, model=cfg.model, latency_ms=latency,
                       prompt_tokens=usage.get("prompt_tokens"), completion_tokens=usage.get("completion_tokens"))
-            return content, {"model": cfg.model, "latency_ms": latency, "usage": usage}
+            return content, {"model": cfg.model, "provider": cfg.provider, "latency_ms": latency, "usage": usage}
         raise LLMUnavailable(f"LLM request failed after retries: {last_exc}")
 
     async def structured(self, prompt: PromptSpec, schema: type[T], **variables: str) -> tuple[T, dict]:
@@ -266,15 +332,18 @@ class LLMClient:
 
     async def health(self) -> dict:
         cfg = await current_config()
+        common = {"provider": cfg.provider, "model": cfg.model, "source": cfg.source,
+                  "providers": provider_summary(get_settings(), await _load_override())}
         if not cfg.enabled:
-            return {"configured": False, "reachable": False, "model": cfg.model, "base_url": None, "source": cfg.source}
-        info: dict[str, Any] = {"configured": True, "base_url": cfg.base_url, "model": cfg.model, "source": cfg.source}
+            return {**common, "configured": False, "reachable": False, "base_url": None}
+        info: dict[str, Any] = {**common, "configured": True, "base_url": cfg.base_url}
         try:
             async with httpx.AsyncClient(timeout=15, transport=self._transport) as client:
                 resp = await client.get(f"{cfg.base_url}/models", headers=self._headers(cfg))
             info["reachable"] = resp.status_code == 200
             if resp.status_code == 200:
-                models = [m.get("id") for m in resp.json().get("data", [])]
+                # Gemini lists ids as "models/gemini-…"; compare without the prefix.
+                models = [str(m.get("id", "")).removeprefix("models/") for m in resp.json().get("data", [])]
                 info["available_models"] = models
                 info["model_loaded"] = cfg.model in models or not models
             else:

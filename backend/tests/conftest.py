@@ -18,6 +18,8 @@ os.environ.update({
     "EMBEDDING_BACKEND": "hash",
     "QDRANT_ENABLED": "false",
     "LLM_BASE_URL": "",
+    "LLM_PROVIDER": "qwen",
+    "GEMINI_API_KEY": "",  # never call the real Gemini API from tests
     "EMBEDDED_WORKER": "false",
     "JWT_SECRET": "test-secret-for-unit-tests-only-0123456789",
     "STORAGE_DIR": str(_TMP / "storage"),

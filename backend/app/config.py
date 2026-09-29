@@ -46,6 +46,14 @@ class Settings(BaseSettings):
     llm_disable_thinking: bool = True
     llm_json_mode: bool = True
     llm_max_jobs_per_run: int = 10
+    # Which LLM answers: "qwen" (the OpenAI-compatible LLM_* endpoint above) or "gemini" (GEMINI_* below).
+    llm_provider: str = "qwen"
+
+    # Google Gemini through its OpenAI-compatible endpoint (same client, prompts and validation as Qwen)
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.8-flash"
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    gemini_reasoning_effort: str = "low"  # thinking budget: none | minimal | low | medium | high ("" = model default)
 
     # Embeddings / vectors
     embedding_backend: str = "fastembed"  # fastembed | hash

@@ -553,8 +553,19 @@ export const Source = z.object({
   scraped: z.boolean(),
 });
 export const SourceList = z.object({ sources: z.array(Source) });
+export const LlmProvider = z.enum(["qwen", "gemini"]);
+export type LlmProvider = z.infer<typeof LlmProvider>;
+const LlmProviderInfo = z.object({ configured: z.boolean(), model: str });
 export const LlmHealth = z
-  .object({ configured: z.boolean(), reachable: z.boolean().optional(), model: str, base_url: str, source: z.enum(["env", "settings"]).optional() })
+  .object({
+    configured: z.boolean(),
+    reachable: z.boolean().optional(),
+    model: str,
+    base_url: str,
+    source: z.enum(["env", "settings"]).optional(),
+    provider: LlmProvider.optional(),
+    providers: z.object({ qwen: LlmProviderInfo, gemini: LlmProviderInfo }).optional(),
+  })
   .passthrough();
 export const LlmTest = z.object({ ok: z.boolean(), parsed: z.unknown(), latency_ms: z.number(), model: z.string() });
 export const AgentRuns = z.object({

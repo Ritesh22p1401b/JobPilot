@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -147,9 +148,12 @@ async def update_source(name: str, body: SourceUpdate, user: User = Depends(curr
 
 # ------------------------------------------------------------------------------ LLM config
 class LLMSettingsIn(BaseModel):
-    base_url: str = Field(default="", max_length=500)
-    model: str = Field(default="", max_length=200)
+    # Omitted fields keep their saved values (so switching provider doesn't wipe a saved Qwen URL); "" clears.
+    base_url: str | None = Field(default=None, max_length=500)
+    model: str | None = Field(default=None, max_length=200)
     api_key: str | None = Field(default=None, max_length=500)
+    # "qwen" | "gemini" chooses the provider; None or "" follows LLM_PROVIDER from the environment.
+    provider: Literal["qwen", "gemini", ""] | None = None
 
 
 @router.get("/system/llm")
@@ -163,16 +167,24 @@ async def set_llm(body: LLMSettingsIn, user: User = Depends(current_user), db: A
     if get_settings().is_production:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Configure the LLM via environment variables in production")
     row = await db.get(SystemSetting, "llm")
-    value = {"base_url": normalize_base_url(body.base_url) if body.base_url else "", "model": body.model}
+    saved = dict(row.value_json or {}) if row else {}
+    value = {
+        "base_url": saved.get("base_url", "") if body.base_url is None else (normalize_base_url(body.base_url) if body.base_url else ""),
+        "model": saved.get("model", "") if body.model is None else body.model,
+    }
     if body.api_key is not None:
         value["api_key"] = body.api_key
-    elif row and row.value_json.get("api_key"):
-        value["api_key"] = row.value_json["api_key"]
+    elif saved.get("api_key"):
+        value["api_key"] = saved["api_key"]
+    provider = saved.get("provider", "") if body.provider is None else body.provider
+    if provider:
+        value["provider"] = provider
     if row is None:
         db.add(SystemSetting(key="llm", value_json=value))
     else:
         row.value_json = value
-    await audit(db, user.id, "llm.configured", None, {"base_url": value["base_url"], "model": body.model})
+    await audit(db, user.id, "llm.configured", None,
+                {"base_url": value["base_url"], "model": value["model"], "provider": provider or "env"})
     await db.commit()
     invalidate_override_cache()
     return await get_llm().health()

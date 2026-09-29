@@ -107,14 +107,86 @@ async def test_llm_env_file_edits_apply_without_restart(monkeypatch, tmp_path):
 
 async def test_llm_settings_override_wins_and_reports_source(monkeypatch):
     async def _override():
-        return llm_mod.LLMConfig(base_url="https://saved.example.com", model="", api_key="")
+        return {"base_url": "https://saved.example.com", "model": "", "api_key": ""}
 
     monkeypatch.setattr(llm_mod, "_load_override", _override)
     monkeypatch.setattr(get_settings(), "llm_base_url", "https://from-env.example.com")
     cfg = await llm_mod.current_config()
-    assert cfg.base_url == "https://saved.example.com/v1" and cfg.source == "settings"
+    assert cfg.base_url == "https://saved.example.com/v1" and cfg.source == "settings" and cfg.provider == "qwen"
     health = await llm_mod.LLMClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"data": []}))).health()
     assert health["source"] == "settings" and health["reachable"]
+
+
+def _use_gemini(monkeypatch, key: str = "gm-key") -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "llm_provider", "gemini")
+    monkeypatch.setattr(settings, "gemini_api_key", key)
+    monkeypatch.setattr(settings, "gemini_model", "gemini-3.8-flash")
+    monkeypatch.setattr(settings, "gemini_reasoning_effort", "low")
+
+
+GEMINI = "https://generativelanguage.googleapis.com/v1beta/openai"
+
+
+@respx.mock
+async def test_gemini_provider_uses_openai_compatible_endpoint(monkeypatch):
+    """LLM_PROVIDER=gemini sends the same chat request to Gemini: bearer key, reasoning effort, no Qwen /no_think."""
+    monkeypatch.setattr(llm_mod, "_load_override", _no_override)
+    monkeypatch.setattr(get_settings(), "llm_base_url", "https://colab.example.com")  # ignored while Gemini is chosen
+    _use_gemini(monkeypatch)
+    route = respx.post(f"{GEMINI}/chat/completions").mock(return_value=httpx.Response(200, json=_completion('{"ok": true}')))
+    content, meta = await llm_mod.LLMClient().chat([{"role": "user", "content": "hi"}])
+    assert json.loads(content) == {"ok": True}
+    assert meta["provider"] == "gemini" and meta["model"] == "gemini-3.8-flash"
+    request = route.calls[0].request
+    body = json.loads(request.content)
+    assert request.headers["Authorization"] == "Bearer gm-key"
+    assert body["model"] == "gemini-3.8-flash" and body["reasoning_effort"] == "low"
+    assert body["messages"][-1]["content"] == "hi"  # no "/no_think" for Gemini
+
+
+async def test_gemini_without_key_is_not_configured(monkeypatch):
+    monkeypatch.setattr(llm_mod, "_load_override", _no_override)
+    _use_gemini(monkeypatch, key="")
+    client = llm_mod.LLMClient()
+    assert not await client.is_enabled()
+    with pytest.raises(llm_mod.LLMUnavailable, match="GEMINI_API_KEY"):
+        await client.chat([{"role": "user", "content": "x"}])
+
+
+async def test_provider_chosen_in_settings_wins_and_health_hides_keys(monkeypatch):
+    async def _override():
+        return {"provider": "gemini"}
+
+    monkeypatch.setattr(llm_mod, "_load_override", _override)
+    monkeypatch.setattr(get_settings(), "llm_base_url", "https://colab.example.com")
+    _use_gemini(monkeypatch, key="secret-gemini-key")
+    monkeypatch.setattr(get_settings(), "llm_provider", "qwen")  # .env says qwen; the Settings choice wins
+    cfg = await llm_mod.current_config()
+    assert cfg.provider == "gemini" and cfg.source == "settings"
+    models = {"data": [{"id": "models/gemini-3.8-flash"}, {"id": "models/gemini-3.5-flash"}]}
+    health = await llm_mod.LLMClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=models))).health()
+    assert health["provider"] == "gemini" and health["reachable"] and health["model_loaded"]
+    assert health["providers"]["qwen"]["configured"] and health["providers"]["gemini"]["configured"]
+    assert "secret-gemini-key" not in json.dumps(health)
+
+
+async def test_env_file_can_switch_provider_without_restart(monkeypatch, tmp_path):
+    monkeypatch.setattr(llm_mod, "_load_override", _no_override)
+    for var in ("LLM_PROVIDER", "GEMINI_API_KEY", "GEMINI_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+    settings = get_settings()
+    for field in ("llm_provider", "gemini_api_key", "gemini_model"):
+        monkeypatch.setattr(settings, field, getattr(settings, field))
+    env = tmp_path / ".env"
+    env.write_text("LLM_PROVIDER=qwen" + chr(10), encoding="utf-8")
+    monkeypatch.setattr(llm_mod, "_env_files", lambda: [env])
+    assert (await llm_mod.current_config()).provider == "qwen"  # baseline read
+
+    env.write_text(chr(10).join(["LLM_PROVIDER=gemini", "GEMINI_API_KEY=k2", "GEMINI_MODEL=gemini-3.5-flash", ""]), encoding="utf-8")
+    os.utime(env, (time.time() + 5, time.time() + 5))
+    cfg = await llm_mod.current_config()
+    assert (cfg.provider, cfg.model, cfg.api_key, cfg.enabled) == ("gemini", "gemini-3.5-flash", "k2", True)
 
 
 async def _no_override():
@@ -251,3 +323,44 @@ def test_log_redaction_keeps_llm_token_counts_but_hides_credentials():
     out = redact({"prompt_tokens": 12, "completion_tokens": 3, "access_token": "abc", "api_key": "k", "nested": {"jwt": "x"}})
     assert out["prompt_tokens"] == 12 and out["completion_tokens"] == 3
     assert out["access_token"] == out["api_key"] == out["nested"]["jwt"] == "[REDACTED]"
+
+
+async def test_settings_api_switches_provider_and_keeps_saved_qwen_url(client, monkeypatch):
+    from tests.conftest import register
+
+    async def _no_network(self):  # health() would call the real endpoints
+        cfg = await llm_mod.current_config()
+        return {"provider": cfg.provider, "model": cfg.model, "source": cfg.source, "configured": cfg.enabled,
+                "providers": llm_mod.provider_summary(get_settings(), await llm_mod._load_override())}
+
+    monkeypatch.setattr(llm_mod.LLMClient, "health", _no_network)
+    _use_gemini(monkeypatch, key="secret-gemini-key")
+    monkeypatch.setattr(get_settings(), "llm_provider", "qwen")
+    h = await register(client)
+
+    r = await client.put("/api/v1/system/llm", headers=h, json={"base_url": "https://saved.example.com", "model": "Qwen/Qwen3-8B"})
+    assert r.json()["provider"] == "qwen" and r.json()["source"] == "settings"
+
+    llm_mod.invalidate_override_cache()
+    r = await client.put("/api/v1/system/llm", headers=h, json={"provider": "gemini"})
+    assert r.json()["provider"] == "gemini" and r.json()["model"] == "gemini-3.8-flash"
+    assert "secret-gemini-key" not in r.text
+
+    llm_mod.invalidate_override_cache()
+    r = await client.put("/api/v1/system/llm", headers=h, json={"provider": "qwen"})
+    cfg = await llm_mod.current_config()
+    assert cfg.provider == "qwen" and cfg.base_url == "https://saved.example.com/v1"  # switching kept the saved URL
+
+    llm_mod.invalidate_override_cache()
+    await client.put("/api/v1/system/llm", headers=h, json={"provider": ""})  # follow LLM_PROVIDER from .env again
+    monkeypatch.setattr(get_settings(), "llm_provider", "gemini")
+    assert (await llm_mod.current_config()).provider == "gemini"
+
+
+def test_retry_delay_honours_server_hints_and_is_capped():
+    gemini_429 = httpx.Response(429, json=[{"error": {"code": 429, "details": [
+        {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "32s"}]}}])
+    assert llm_mod.retry_delay(gemini_429, attempt=0) == 32.0
+    assert llm_mod.retry_delay(httpx.Response(503, headers={"Retry-After": "7"}), attempt=0) == 7.0
+    assert llm_mod.retry_delay(httpx.Response(503, headers={"Retry-After": "600"}), attempt=0) == llm_mod.MAX_RETRY_DELAY_SECONDS
+    assert [llm_mod.retry_delay(httpx.Response(502), attempt=a) for a in (0, 1, 2)] == [1.0, 2.0, 4.0]

@@ -47,6 +47,8 @@ function Appearance() {
   );
 }
 
+const PROVIDER_LABEL: Record<S.LlmProvider, string> = { qwen: "Qwen3-8B (Colab)", gemini: "Google Gemini" };
+
 function LlmSettings() {
   const status = useLlmStatus();
   const qc = useQueryClient();
@@ -56,10 +58,32 @@ function LlmSettings() {
   const save = useApiMutation((body: { base_url: string; model: string; api_key?: string }) => api(S.LlmHealth, "PUT", "/system/llm", body), [["ready"]]);
   const test = useApiMutation(() => api(S.LlmTest, "POST", "/system/llm/test"));
   const resetToEnv = useApiMutation(() => api(S.LlmHealth, "PUT", "/system/llm", { base_url: "", model: "" }), [["ready"]]);
+  // "" = follow LLM_PROVIDER from backend/.env
+  const choose = useApiMutation((provider: S.LlmProvider | "") => api(S.LlmHealth, "PUT", "/system/llm", { provider }), [["ready"]]);
 
+  const provider: S.LlmProvider = status.data?.provider ?? "qwen";
   useEffect(() => {
-    if (status.data) setForm((f) => ({ ...f, base_url: status.data.base_url ?? "", model: status.data.model ?? "qwen3:8b" }));
+    // The Qwen form only mirrors the Qwen endpoint; while Gemini is active the status describes Gemini instead.
+    if (status.data && (status.data.provider ?? "qwen") === "qwen")
+      setForm((f) => ({ ...f, base_url: status.data.base_url ?? "", model: status.data.model ?? "qwen3:8b" }));
   }, [status.data]);
+
+  const onChoose = async (next: S.LlmProvider | "") => {
+    setError(null);
+    test.reset();
+    try {
+      const out = await choose.mutateAsync(next);
+      qc.setQueryData(["llm"], out);
+      const name = PROVIDER_LABEL[out.provider ?? "qwen"];
+      toast({
+        tone: out.reachable ? "success" : out.configured ? "error" : "info",
+        title: out.reachable ? `Using ${name} (${out.model})` : out.configured ? `${name} selected, but it isn’t reachable` : `${name} selected, but it isn’t set up`,
+        body: out.configured ? undefined : out.provider === "gemini" ? "Add GEMINI_API_KEY to backend/.env." : "Add the Colab URL below or LLM_BASE_URL in backend/.env.",
+      });
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
 
   const onSave = async () => {
     const parsed = LlmForm.safeParse(form);
@@ -87,32 +111,78 @@ function LlmSettings() {
   };
 
   const s = status.data;
+  const gemini = s?.providers?.gemini;
   return (
     <Card>
       <CardHeader
-        title="AI model (Qwen3-8B)"
-        description="Any OpenAI-compatible endpoint. For Google Colab, paste the URL and key printed by colab/qwen3_colab_server.ipynb; they change every Colab session. Without a model, matching, ATS tests and tailoring still work; explanations use rules."
+        title={`AI model (${PROVIDER_LABEL[provider]})`}
+        description="Choose which model writes explanations and tailored text. Both use the same prompts, and every output is validated. Without a model, matching, ATS tests and tailoring still work; explanations use rules."
         action={s && <Badge tone={s.reachable ? "success" : s.configured ? "danger" : "warning"}>{s.reachable ? "● Connected" : s.configured ? "● Unreachable" : "● Not connected"}</Badge>}
       />
       <CardBody className="space-y-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <Segmented<S.LlmProvider>
+            label="LLM provider"
+            value={provider}
+            onChange={(p) => p !== provider && void onChoose(p)}
+            options={(["qwen", "gemini"] as const).map((p) => ({
+              id: p,
+              label: (
+                <>
+                  {PROVIDER_LABEL[p]}
+                  {s?.providers && !s.providers[p].configured && <span className="text-[11px] font-normal text-muted">(not set up)</span>}
+                </>
+              ),
+            }))}
+          />
+          {choose.isPending && <span className="text-xs text-muted">Switching…</span>}
+        </div>
+
         {s && (
-          <Callout tone="info" title={s.source === "settings" ? "Using the URL saved here" : "Using backend/.env"}>
-            {s.source === "settings"
-              ? "A URL saved on this page overrides LLM_BASE_URL in backend/.env. Switch back to use the .env values."
-              : "LLM_BASE_URL, LLM_API_KEY and LLM_MODEL are read from backend/.env. Edits to that file apply within seconds; no restart needed. Saving here overrides them."}
+          <Callout tone="info" title={s.source === "settings" ? `${PROVIDER_LABEL[provider]} chosen on this page` : "Following backend/.env"}>
+            {s.source === "settings" ? (
+              <>
+                This choice overrides <code>LLM_PROVIDER</code> in backend/.env.{" "}
+                <button type="button" className="font-medium text-primary hover:underline" onClick={() => void onChoose("")}>
+                  Follow backend/.env instead
+                </button>
+              </>
+            ) : (
+              <>
+                <code>LLM_PROVIDER</code> in backend/.env selects the model (<code>qwen</code> or <code>gemini</code>). Edits to that file apply within seconds; no restart
+                needed.
+              </>
+            )}
           </Callout>
         )}
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Base URL" htmlFor="llm-url" hint="“/v1” is added if missing.">
-            <Input id="llm-url" value={form.base_url} placeholder="https://xxxx.trycloudflare.com/v1" onChange={(e) => setForm({ ...form, base_url: e.target.value })} />
-          </Field>
-          <Field label="Model" htmlFor="llm-model">
-            <Input id="llm-model" value={form.model} placeholder="qwen3:8b" onChange={(e) => setForm({ ...form, model: e.target.value })} />
-          </Field>
-          <Field label="API key" htmlFor="llm-key" hint="Stored on the server only and never shown again. Leave blank to keep the current key.">
-            <Input id="llm-key" type="password" autoComplete="off" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} />
-          </Field>
-        </div>
+
+        {provider === "gemini" ? (
+          <div className="space-y-2 rounded-lg border border-border bg-background px-4 py-3 text-[13px]">
+            <div className="flex justify-between gap-3">
+              <span className="text-subtle">Model</span>
+              <span className="font-medium">{gemini?.model ?? s?.model ?? "–"}</span>
+            </div>
+            <div className="flex justify-between gap-3">
+              <span className="text-subtle">API key</span>
+              <span className={gemini?.configured ? "text-success" : "text-warning"}>{gemini?.configured ? "✓ Set in backend/.env" : "⚠ Missing: add GEMINI_API_KEY to backend/.env"}</span>
+            </div>
+            <p className="text-xs text-muted">
+              Change <code>GEMINI_MODEL</code> or <code>GEMINI_API_KEY</code> in backend/.env. The key stays on the server and is never sent to the browser.
+            </p>
+          </div>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2">
+            <Field label="Base URL" htmlFor="llm-url" hint="“/v1” is added if missing.">
+              <Input id="llm-url" value={form.base_url} placeholder="https://xxxx.trycloudflare.com/v1" onChange={(e) => setForm({ ...form, base_url: e.target.value })} />
+            </Field>
+            <Field label="Model" htmlFor="llm-model">
+              <Input id="llm-model" value={form.model} placeholder="qwen3:8b" onChange={(e) => setForm({ ...form, model: e.target.value })} />
+            </Field>
+            <Field label="API key" htmlFor="llm-key" hint="Stored on the server only and never shown again. Leave blank to keep the current key.">
+              <Input id="llm-key" type="password" autoComplete="off" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} />
+            </Field>
+          </div>
+        )}
         {error && <Callout tone="danger">{error}</Callout>}
         {test.error && (
           <Callout tone="danger" title="Test failed">
@@ -125,15 +195,17 @@ function LlmSettings() {
           </Callout>
         )}
         <div className="flex gap-2">
-          <Button onClick={onSave} loading={save.isPending}>
-            Save
-          </Button>
+          {provider === "qwen" && (
+            <Button onClick={onSave} loading={save.isPending}>
+              Save
+            </Button>
+          )}
           <Button variant="secondary" onClick={() => test.mutate(undefined)} loading={test.isPending} disabled={!s?.configured}>
             Test connection
           </Button>
-          {s?.source === "settings" && (
+          {provider === "qwen" && s?.base_url && s.source === "settings" && (
             <Button variant="ghost" onClick={onUseEnv} loading={resetToEnv.isPending}>
-              Use backend/.env instead
+              Use LLM_BASE_URL from backend/.env
             </Button>
           )}
         </div>

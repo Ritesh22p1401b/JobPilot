@@ -5,6 +5,8 @@ import type { NextConfig } from "next";
 const backend = process.env.BACKEND_URL ?? "http://127.0.0.1:8000";
 
 const nextConfig: NextConfig = {
+  // The Docker image sets NEXT_OUTPUT=standalone (self-contained `node server.js`); local builds are unchanged.
+  output: process.env.NEXT_OUTPUT === "standalone" ? "standalone" : undefined,
   reactStrictMode: true,
   poweredByHeader: false,
   async rewrites() {

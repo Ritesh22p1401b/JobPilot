@@ -1,0 +1,122 @@
+# JobPilot - base Compose file: the services every environment shares.
+# Nothing here is published to the host; ports, restart policies, nginx and TLS live in the override files.
+#
+#   production:  docker compose -f compose.yaml -f compose.prod.yaml up -d --build
+#   dev (opt.):  docker compose -f compose.yaml -f compose.dev.yaml up --build
+#
+# Windows development does not need Docker at all (see README). Settings come from ./.env (copy .env.example).
+name: jobpilot
+
+# Container-to-container addresses use service names; these override any 127.0.0.1 values in .env.
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-jobpilot}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-jobpilot}
+  QDRANT_URL: http://qdrant:6333
+  STORAGE_DIR: /data/storage
+  FASTEMBED_CACHE_PATH: /data/models
+  # The worker runs in its own container, never inside the API process.
+  EMBEDDED_WORKER: "false"
+
+x-backend: &backend
+  image: jobpilot-backend:latest
+  build:
+    context: ./backend
+    dockerfile: ../docker/backend.Dockerfile
+  env_file:
+    - path: .env
+      required: false
+  volumes:
+    - app_storage:/data/storage
+    - model_cache:/data/models
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-jobpilot}
+      POSTGRES_USER: ${POSTGRES_USER:-jobpilot}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:v1.19.1
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      # The Qdrant image has no curl/wget; a TCP connect to the HTTP port is enough.
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: applies Alembic migrations, then exits. The API and worker start only after it succeeds.
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      <<: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    <<: *backend
+    environment:
+      <<: *backend-env
+    expose:
+      - "8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  # Background agents: claims events from the PostgreSQL queue and runs the scheduled job discovery.
+  worker:
+    <<: *backend
+    command: ["python", "-m", "app.workers.worker"]
+    environment:
+      <<: *backend-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      qdrant:
+        condition: service_healthy
+
+  frontend:
+    image: jobpilot-frontend:latest
+    build:
+      context: ./frontend
+      dockerfile: ../docker/frontend.Dockerfile
+      target: runtime
+      args:
+        BACKEND_URL: http://backend:8000
+    expose:
+      - "3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  postgres_data:   # relational data + the event queue
+  qdrant_data:     # vector collections
+  app_storage:     # uploaded resumes and generated DOCX/PDF files
+  model_cache:     # embedding model (downloaded once on first start)
